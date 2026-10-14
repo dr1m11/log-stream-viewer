@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Test output
+coverage/
+playwright-report/
+test-results/
+blob-report/
+.lighthouseci/
+
+# Tool caches
+.eslintcache
+.wrangler/
+.vite/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+.dev.vars*
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# Claude Code (personal, not shared)
+.claude/settings.local.json
+.claude/worktrees/
+.claude/*.lock
+CLAUDE.local.md
+
+# Private local notes
+.local/

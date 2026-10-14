@@ -1,0 +1,13 @@
+{
+  "name": "log-stream-viewer",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Real-time log stream viewer: WebSocket stream, virtualized table for 100K+ rows, search in a Web Worker",
+  "license": "MIT",
+  "author": "Marat Gabdrashitov",
+  "type": "module",
+  "packageManager": "pnpm@10.30.3",
+  "engines": {
+    "node": ">=24.15.0"
+  }
+}
