@@ -8,6 +8,7 @@ Product scope: `docs/product-spec.md`. Stages and current stage: `docs/roadmap.m
 | Command                            | What it does                                                                                         |
 | ---------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `pnpm dev`                         | Mock server (:8787) + Vite dev server (:5173) in parallel — long-running, start it in the background |
+| `pnpm dev:server`                  | Mock server only (`node --watch`, :8787) — long-running, background                                  |
 | `pnpm verify`                      | format check → lint → Steiger → typecheck → unit tests → hook tests → build. **Green before a PR**   |
 | `pnpm verify:full`                 | `verify` + Playwright e2e                                                                            |
 | `pnpm lint` / `pnpm lint:fsd`      | ESLint / Steiger (FSD boundaries)                                                                    |
@@ -15,8 +16,9 @@ Product scope: `docs/product-spec.md`. Stages and current stage: `docs/roadmap.m
 | `pnpm test` / `pnpm test:coverage` | Vitest projects `protocol`, `mock-server`, `web` (coverage gates in `vitest.config.ts`)              |
 | `pnpm test:e2e`                    | Playwright against `vite preview` + the mock server                                                  |
 | `pnpm test:hooks`                  | `node:test` for `.claude/hooks` and `scripts`                                                        |
+| `pnpm bench`                       | Vitest benchmarks (`*.bench.ts`, e.g. protocol parsing)                                              |
 | `pnpm serve:demo` / `pnpm lhci`    | Preview + mock server (for Lighthouse) / Lighthouse CI                                               |
-| `pnpm ports:free`                  | Stop leftover dev servers of this repo on 5173/4173/8787                                             |
+| `pnpm ports:free`                  | Stop leftover dev servers of this repo on 5173/4173/8787 and their `node --watch` parents            |
 
 ## Monorepo
 
