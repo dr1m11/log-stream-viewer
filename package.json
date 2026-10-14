@@ -21,6 +21,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "bench": "vitest bench --run --reporter=verbose",
     "test:e2e": "pnpm --recursive --if-present test:e2e",
     "test:hooks": "node --test \".claude/hooks/*.test.mjs\" \"scripts/*.test.mjs\"",
     "verify": "pnpm format:check && pnpm lint && pnpm lint:fsd && pnpm typecheck && pnpm test && pnpm test:hooks && pnpm build",

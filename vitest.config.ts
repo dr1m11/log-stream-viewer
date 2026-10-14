@@ -24,7 +24,7 @@ export default defineConfig({
       // provider), so both forms are listed. A pattern that matches nothing makes the thresholds
       // pass vacuously — check the report lists the package's files after changing these.
       include: ['packages/*/src/**/*.ts', 'apps/*/src/**/*.{ts,tsx}', 'src/**/*.{ts,tsx}'],
-      exclude: ['**/*.test.{ts,tsx}', '**/index.ts', '**/src/main.{ts,tsx}'],
+      exclude: ['**/*.{test,bench}.{ts,tsx}', '**/index.ts', '**/src/main.{ts,tsx}'],
       reporter: ['text', 'html', 'json-summary', 'json'],
       reportOnFailure: true,
       // Per-package gates (see docs/adr/0001); mock-server (80%) is added with the package.
