@@ -15,7 +15,7 @@ Current version: **1** (`PROTOCOL_VERSION`).
 ## Connection
 
 ```
-wss://log-stream-viewer-mock.fly.dev/ws?v=1&rate=500&scenario=steady&seed=42
+wss://log-stream-viewer-mock.fly.dev/ws?v=1&rate=200&scenario=steady&seed=42
 ws://localhost:8787/ws?v=1                      (local default, VITE_STREAM_URL)
 ```
 
@@ -24,7 +24,7 @@ Build the URL with `buildConnectionUrl(endpoint, params)`; the server reads it w
 | Param      | Value                                        | Default                       | Notes                                                                                                                |
 | ---------- | -------------------------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `v`        | protocol version, positive integer           | — (required)                  | Missing, malformed or unsupported → upgrade, then close **4001**.                                                    |
-| `rate`     | events per second, non-negative integer      | `DEFAULT_RATE` (500)          | Clamped to `[limits.minRate, limits.maxRate]`; `MIN_RATE` is 10, the ceiling depends on the deployment (`MAX_RATE`). |
+| `rate`     | events per second, non-negative integer      | `DEFAULT_RATE` (200)          | Clamped to `[limits.minRate, limits.maxRate]`; `MIN_RATE` is 10, the ceiling depends on the deployment (`MAX_RATE`). |
 | `scenario` | `steady` \| `error-burst` \| `traffic-spike` | `steady` (`DEFAULT_SCENARIO`) |                                                                                                                      |
 | `seed`     | integer `0…MAX_SEED` (unsigned 32-bit)       | chosen by the server          | The same seed and scenario reproduce the stream.                                                                     |
 | `resume`   | `streamId` to continue                       | —                             | **Reserved for B4.** Only together with `after`. A v1 server starts a new stream and answers `resumed: false`.       |
@@ -86,7 +86,7 @@ Client frames are limited to `MAX_CLIENT_MESSAGE_BYTES` (4096); a bigger one clo
 sequenceDiagram
     participant C as Web app
     participant S as Mock server
-    C->>S: GET /ws?v=1&rate=500&scenario=steady&seed=42 (Upgrade)
+    C->>S: GET /ws?v=1&rate=200&scenario=steady&seed=42 (Upgrade)
     S-->>C: 101 Switching Protocols (permessage-deflate)
     S->>C: hello { streamId, stream, limits, expiresAt }
     loop every 50 ms (ticks with events)

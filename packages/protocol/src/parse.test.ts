@@ -160,7 +160,7 @@ describe('parseServerMessage', () => {
       [{ serverTime: -1 }, 'serverTime'],
       [{ stream: undefined }, 'stream'],
       [{ stream: null }, 'stream'],
-      [{ stream: [500, 'steady', 42] }, 'stream'],
+      [{ stream: [200, 'steady', 42] }, 'stream'],
       [{ stream: { ...hello.stream, rate: -10 } }, 'stream.rate'],
       [{ stream: { ...hello.stream, scenario: 'chaos' } }, 'stream.scenario'],
       [{ stream: { ...hello.stream, seed: 2 ** 32 } }, 'stream.seed'],

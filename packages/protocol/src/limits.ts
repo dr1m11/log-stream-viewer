@@ -11,7 +11,7 @@ export const PROTOCOL_VERSION = 1;
 export const MIN_RATE = 10;
 
 /** Rate in events per second when the client does not ask for one. */
-export const DEFAULT_RATE = 500;
+export const DEFAULT_RATE = 200;
 
 /** The server flushes generated events as one `batch` per tick of this length. */
 export const BATCH_INTERVAL_MS = 50;

@@ -21,8 +21,8 @@ describe('buildConnectionQuery', () => {
   });
 
   it('adds the stream settings that are set', () => {
-    expect(buildConnectionQuery({ version: 1, rate: 500, scenario: 'steady', seed: 42 })).toBe(
-      'v=1&rate=500&scenario=steady&seed=42',
+    expect(buildConnectionQuery({ version: 1, rate: 200, scenario: 'steady', seed: 42 })).toBe(
+      'v=1&rate=200&scenario=steady&seed=42',
     );
     expect(buildConnectionQuery({ version: 1, scenario: 'error-burst' })).toBe(
       'v=1&scenario=error-burst',
@@ -53,7 +53,7 @@ describe('buildConnectionUrl', () => {
 describe('parseConnectionQuery', () => {
   it.each<ConnectionParams>([
     { version: 1 },
-    { version: 1, rate: 500, scenario: 'steady', seed: 42 },
+    { version: 1, rate: 200, scenario: 'steady', seed: 42 },
     { version: 2, rate: 0, scenario: 'traffic-spike', seed: MAX_SEED },
     { version: 1, seed: 0, resume: { streamId: 'st_01JA2R7QK3M9X4V8T6', after: 0 } },
     { version: 1, resume: { streamId: 'st/1 a&b=c%', after: 2190 } },
@@ -91,7 +91,7 @@ describe('parseConnectionQuery', () => {
 
   it.each([
     ['', ''],
-    ['rate=500', ''],
+    ['rate=200', ''],
   ])('rejects %j because v is missing', (query, value) => {
     expect(parseConnectionQuery(query)).toEqual({
       ok: false,

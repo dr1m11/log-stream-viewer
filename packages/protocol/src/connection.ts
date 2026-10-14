@@ -2,7 +2,7 @@ import { MAX_SEED } from './limits.ts';
 import { err, ok, type Result } from './result.ts';
 import { isScenario, type Scenario } from './scenarios.ts';
 
-/** Path of the WebSocket endpoint: `wss://<host>/ws?v=1&rate=500&scenario=steady&seed=42`. */
+/** Path of the WebSocket endpoint: `wss://<host>/ws?v=1&rate=200&scenario=steady&seed=42`. */
 export const STREAM_PATH = '/ws';
 
 const PARAM_NAMES = ['v', 'rate', 'scenario', 'seed', 'resume', 'after'] as const;
