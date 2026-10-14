@@ -4,6 +4,7 @@ import {
   buildConnectionQuery,
   buildConnectionUrl,
   type ConnectionParams,
+  MAX_ISSUE_VALUE_LENGTH,
   parseConnectionQuery,
 } from './connection.ts';
 import { MAX_SEED, PROTOCOL_VERSION } from './limits.ts';
@@ -142,6 +143,26 @@ describe('parseConnectionQuery', () => {
     expect(paramsOf(`v=1&${query}`)).toEqual({
       params: { version: 1 },
       ignored: [{ param, value, problem }],
+    });
+  });
+
+  it('cuts reported values to MAX_ISSUE_VALUE_LENGTH so they fit a close reason', () => {
+    const long = 'x'.repeat(500);
+    const cut = long.slice(0, MAX_ISSUE_VALUE_LENGTH);
+    expect(parseConnectionQuery(`v=${long}`)).toEqual({
+      ok: false,
+      error: { param: 'v', value: cut, problem: 'not-an-integer' },
+    });
+    expect(paramsOf(`v=1&scenario=${long}`)?.ignored).toEqual([
+      { param: 'scenario', value: cut, problem: 'unknown-scenario' },
+    ]);
+  });
+
+  it('decodes a long resume id in full even though issues are cut', () => {
+    const streamId = 's'.repeat(100);
+    expect(paramsOf(`v=1&resume=${streamId}&after=5`)?.params.resume).toEqual({
+      streamId,
+      after: 5,
     });
   });
 

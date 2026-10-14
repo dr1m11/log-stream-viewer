@@ -44,7 +44,10 @@ export type ConnectionParamProblem =
 /** A query parameter that could not be used. */
 export interface ConnectionParamIssue {
   readonly param: ConnectionParamName;
-  /** The value as it appeared in the query (still percent-encoded). */
+  /**
+   * The value as it appeared in the query (still percent-encoded), cut to
+   * `MAX_ISSUE_VALUE_LENGTH` characters so it fits a close reason (123 bytes).
+   */
   readonly value: string;
   readonly problem: ConnectionParamProblem;
 }
@@ -126,7 +129,11 @@ export function parseConnectionQuery(
   return ok({ params, ignored });
 }
 
+/** Longest `ConnectionParamIssue.value`; longer values are cut. */
+export const MAX_ISSUE_VALUE_LENGTH = 64;
+
 interface RawParam {
+  /** The value as it appeared in the query, cut to `MAX_ISSUE_VALUE_LENGTH` for issues. */
   readonly raw: string;
   /** Percent-decoded value; `undefined` when the encoding is malformed. */
   readonly decoded: string | undefined;
@@ -146,7 +153,7 @@ function readQuery(query: string): Map<ConnectionParamName, RawParam> {
     const name = decodeComponent(separator === -1 ? pair : pair.slice(0, separator));
     if (name === undefined || !isParamName(name) || params.has(name)) continue;
     const raw = separator === -1 ? '' : pair.slice(separator + 1);
-    params.set(name, { raw, decoded: decodeComponent(raw) });
+    params.set(name, { raw: raw.slice(0, MAX_ISSUE_VALUE_LENGTH), decoded: decodeComponent(raw) });
   }
   return params;
 }

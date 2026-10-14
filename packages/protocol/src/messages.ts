@@ -61,20 +61,31 @@ export interface ConfigMessage {
   readonly scenario: Scenario;
 }
 
-/** Codes of the `error` message. */
-export const ERROR_CODES = ['bad-message', 'unsupported'] as const;
+/** `error` codes defined in this protocol version. Newer servers may add codes (an additive change). */
+export const KNOWN_ERROR_CODES = ['bad-message', 'unsupported'] as const;
 
 /**
  * Why the server rejected a client message:
  * - `bad-message` — not JSON or not a valid message;
  * - `unsupported` — a message type this server does not know.
  */
-export type ErrorCode = (typeof ERROR_CODES)[number];
+export type KnownErrorCode = (typeof KNOWN_ERROR_CODES)[number];
+
+const KNOWN_CODES: readonly string[] = KNOWN_ERROR_CODES;
+
+/** Tells whether an `error` code is one this protocol version defines. */
+export function isKnownErrorCode(code: string): code is KnownErrorCode {
+  return KNOWN_CODES.includes(code);
+}
 
 /** The server rejected a client message. The connection stays open. */
 export interface ErrorMessage {
   readonly type: 'error';
-  readonly code: ErrorCode;
+  /**
+   * Any non-empty string, so a newer server's codes do not break older clients. Servers of this
+   * version send a {@link KnownErrorCode}; clients treat other codes as a generic error.
+   */
+  readonly code: string;
   /** Human-readable details for logs; not meant for parsing. */
   readonly message: string;
 }

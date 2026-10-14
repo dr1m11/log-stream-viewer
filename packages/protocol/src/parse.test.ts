@@ -125,7 +125,7 @@ describe('parseServerMessage', () => {
         batchWith({ message: 1 }),
         batchWith({ payload: [] }),
         variant(config, { scenario: 'chaos' }),
-        variant(error, { code: 'internal' }),
+        variant(error, { code: '' }),
       ].map((raw) => {
         const result = parseServerMessage(raw);
         return result.ok ? undefined : result.error.message;
@@ -133,7 +133,7 @@ describe('parseServerMessage', () => {
       expect(messages).toEqual([
         'hello.protocolVersion must be a positive integer',
         'hello.resumed must be a boolean',
-        'hello.serverTime must be a non-negative finite number',
+        'hello.serverTime must be an epoch-ms timestamp from 0 to 8640000000000000',
         'hello.stream must be an object',
         'hello.stream.seed must be an integer from 0 to 4294967295',
         'hello.limits.maxRate must be a non-negative integer',
@@ -144,7 +144,7 @@ describe('parseServerMessage', () => {
         'batch.events[1].message must be a string',
         'batch.events[1].payload must be an object',
         'config.scenario must be one of steady, error-burst, traffic-spike',
-        'error.code must be one of bad-message, unsupported',
+        'error.code must be a non-empty string',
       ]);
     });
   });
@@ -200,7 +200,10 @@ describe('parseServerMessage', () => {
       [{ seq: -8 }, 'seq'],
       [{ seq: 8.5 }, 'seq'],
       [{ seq: 2 ** 53 }, 'seq'],
+      [{ seq: 7 }, 'seq'],
+      [{ seq: 6 }, 'seq'],
       [{ ts: -1 }, 'ts'],
+      [{ ts: 8.64e15 + 1 }, 'ts'],
       [{ ts: '2026-10-14T12:00:00Z' }, 'ts'],
       [{ level: 'verbose' }, 'level'],
       [{ level: 'INFO' }, 'level'],
@@ -221,6 +224,21 @@ describe('parseServerMessage', () => {
       '{"type":"batch","sentAt":1,"events":[{"seq":1,"ts":-1e999,"level":"info","service":"a","host":"b","message":""}]}',
     ])('rejects non-finite numbers (JSON has no NaN; 1e999 parses to Infinity): %s', (raw) => {
       expect(parseServerMessage(raw).ok).toBe(false);
+    });
+
+    it('requires seq to grow within a batch but allows gaps', () => {
+      expect(parseServerMessage(batchWith({ seq: 7 }))).toEqual({
+        ok: false,
+        error: {
+          kind: 'invalid-message',
+          message: "batch.events[1].seq must be greater than the previous event's seq",
+        },
+      });
+      expect(parseServerMessage(batchWith({ seq: 40 })).ok).toBe(true);
+    });
+
+    it('accepts the latest timestamp a Date can hold', () => {
+      expect(parseServerMessage(batchWith({ ts: 8.64e15 })).ok).toBe(true);
     });
 
     it('accepts an empty batch and an empty message text', () => {
@@ -267,11 +285,17 @@ describe('parseServerMessage', () => {
 
   describe('error', () => {
     it.each([
-      [{ code: 'internal' }, 'code'],
+      [{ code: '' }, 'code'],
+      [{ code: 42 }, 'code'],
       [{ code: undefined }, 'code'],
       [{ message: undefined }, 'message'],
     ])('rejects an error with %o (%s)', (patch, field) => {
       expect(failedField(parseServerMessage(variant(error, patch)))).toBe(`error.${field}`);
+    });
+
+    it('accepts a code from a newer server, so old clients still read the error', () => {
+      const newer = { ...error, code: 'rate-limited' };
+      expect(parseServerMessage(JSON.stringify(newer))).toEqual({ ok: true, value: newer });
     });
   });
 });
@@ -299,6 +323,13 @@ describe('parseClientMessage', () => {
     expect(failedField(parseClientMessage(variant({ type: 'configure' }, patch)))).toBe(
       `configure.${field}`,
     );
+  });
+
+  it('returns a fresh object with the known fields only', () => {
+    const raw = '{"type":"configure","rate":100,"admin":true,"__proto__":{"polluted":1}}';
+    const result = parseClientMessage(raw);
+    expect(result).toStrictEqual({ ok: true, value: { type: 'configure', rate: 100 } });
+    expect(result.ok && Object.keys(result.value)).toEqual(['type', 'rate']);
   });
 
   it.each(['hello', 'subscribe', 'constructor'])(

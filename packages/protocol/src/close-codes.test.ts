@@ -4,6 +4,7 @@ import {
   busyCloseReason,
   CLOSE_CODES,
   isTerminalCloseCode,
+  MAX_RETRY_AFTER_SECONDS,
   retryAfterSeconds,
 } from './close-codes.ts';
 
@@ -40,6 +41,16 @@ describe('busy close reason', () => {
     expect(busyCloseReason(-5)).toBe('busy; retry-after=0');
   });
 
+  it.each([
+    [7200, MAX_RETRY_AFTER_SECONDS],
+    [Number.MAX_SAFE_INTEGER, MAX_RETRY_AFTER_SECONDS],
+    [Infinity, MAX_RETRY_AFTER_SECONDS],
+    [NaN, MAX_RETRY_AFTER_SECONDS],
+    [-Infinity, 0],
+  ])('caps the delay %s at %i seconds', (input, seconds) => {
+    expect(busyCloseReason(input)).toBe(`busy; retry-after=${String(seconds)}`);
+  });
+
   it('fits the 123-byte limit of a close reason', () => {
     expect(busyCloseReason(Number.MAX_SAFE_INTEGER).length).toBeLessThanOrEqual(123);
   });
@@ -51,9 +62,13 @@ describe('busy close reason', () => {
   it.each([
     ['retry-after=5', 5],
     ['busy;retry-after=12; region=fra', 12],
+    ['busy; retry-after=7200', MAX_RETRY_AFTER_SECONDS],
+    ['busy; retry-after=999999999', MAX_RETRY_AFTER_SECONDS],
+    ['busy; retry-after=1234567890', undefined],
     ['busy', undefined],
     ['', undefined],
     ['busy; retry-after=soon', undefined],
+    ['busy; retry-after=-5', undefined],
     ['busy; x-retry-after=5', undefined],
   ])('reads %j as %s', (reason, seconds) => {
     expect(retryAfterSeconds(reason)).toBe(seconds);

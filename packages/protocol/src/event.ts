@@ -1,4 +1,8 @@
-/** Log levels from the least to the most severe; an index in this list is the level's severity. */
+/**
+ * Log levels from the least to the most severe; an index in this list is the level's severity.
+ * The set is closed: parsers reject other values, so adding a level is a breaking change that
+ * needs a new `PROTOCOL_VERSION`.
+ */
 export const LOG_LEVELS = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'] as const;
 
 /** Severity of a log event. */

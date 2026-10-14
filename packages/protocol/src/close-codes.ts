@@ -30,15 +30,27 @@ export function isTerminalCloseCode(code: number): boolean {
   return code === CLOSE_CODES.sessionExpired || code === CLOSE_CODES.unsupportedVersion;
 }
 
-const RETRY_AFTER = /(?:^|;)\s*retry-after=(\d+)\s*(?:;|$)/;
+/** Longest `retry-after` delay a busy server asks for, and a client honours. */
+export const MAX_RETRY_AFTER_SECONDS = 3600;
+
+const RETRY_AFTER = /(?:^|;)\s*retry-after=(\d{1,9})\s*(?:;|$)/;
+
+/** Rounds a delay up to whole seconds within `0…MAX_RETRY_AFTER_SECONDS`; NaN means the maximum. */
+function clampRetryAfter(seconds: number): number {
+  if (!Number.isFinite(seconds)) return seconds < 0 ? 0 : MAX_RETRY_AFTER_SECONDS;
+  return Math.min(MAX_RETRY_AFTER_SECONDS, Math.max(0, Math.ceil(seconds)));
+}
 
 /** Close reason for {@link CLOSE_CODES.busy}, e.g. `busy; retry-after=30`. */
 export function busyCloseReason(retryAfterSeconds: number): string {
-  return `busy; retry-after=${String(Math.max(0, Math.ceil(retryAfterSeconds)))}`;
+  return `busy; retry-after=${String(clampRetryAfter(retryAfterSeconds))}`;
 }
 
-/** Reads the `retry-after` delay in seconds from a close reason, if it has one. */
+/**
+ * Reads the `retry-after` delay in seconds from a close reason, capped at
+ * {@link MAX_RETRY_AFTER_SECONDS}; `undefined` when the reason has none.
+ */
 export function retryAfterSeconds(reason: string): number | undefined {
   const digits = RETRY_AFTER.exec(reason)?.[1];
-  return digits === undefined ? undefined : Number(digits);
+  return digits === undefined ? undefined : clampRetryAfter(Number(digits));
 }

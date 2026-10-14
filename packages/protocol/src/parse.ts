@@ -1,6 +1,6 @@
 import { isLogLevel, LOG_LEVELS } from './event.ts';
 import { MAX_SEED } from './limits.ts';
-import { type ClientMessage, ERROR_CODES, type ServerMessage } from './messages.ts';
+import type { ClientMessage, ConfigureMessage, ServerMessage } from './messages.ts';
 import { err, ok, type Result } from './result.ts';
 import { isScenario, SCENARIOS } from './scenarios.ts';
 
@@ -18,7 +18,8 @@ export type ProtocolError =
 
 /**
  * Parses a text frame from the server. Checks the envelope and scalar fields (including every
- * event of a batch) but not the contents of `payload`. Never throws.
+ * event of a batch and the order of their `seq`) but not the contents of `payload`. Fields this
+ * version does not know are kept on the returned object. Never throws.
  */
 export function parseServerMessage(raw: string): Result<ServerMessage, ProtocolError> {
   const decoded = decode(raw);
@@ -50,7 +51,10 @@ export function parseServerMessage(raw: string): Result<ServerMessage, ProtocolE
   return ok(validated as ServerMessage);
 }
 
-/** Parses a text frame from the client. Never throws. */
+/**
+ * Parses a text frame from the client. The input is untrusted, so the result is a fresh object
+ * with the known fields only. Never throws.
+ */
 export function parseClientMessage(raw: string): Result<ClientMessage, ProtocolError> {
   const decoded = decode(raw);
   if (!decoded.ok) return decoded;
@@ -58,8 +62,7 @@ export function parseClientMessage(raw: string): Result<ClientMessage, ProtocolE
   if (message.type !== 'configure') return unknownType(message.type);
   const problem = checkConfigure(message);
   if (problem !== undefined) return invalid(message.type, problem);
-  const validated: unknown = message;
-  return ok(validated as ClientMessage);
+  return ok(pickConfigure(message));
 }
 
 // --- Envelope -----------------------------------------------------------------------------------
@@ -143,18 +146,25 @@ function checkEvents(m: Fields): Problem {
   const events = m.events;
   if (!Array.isArray(events)) return 'events must be an array';
   // Hot path: an index loop with no allocations unless an event is invalid.
+  let previousSeq = 0;
   for (let index = 0; index < events.length; index++) {
     const event: unknown = events[index];
     if (!isRecord(event)) return `events[${String(index)}] must be an object`;
+    const seq = event.seq;
+    if (!isPositiveInteger(seq)) return `events[${String(index)}].seq must be a positive integer`;
+    if (seq <= previousSeq) {
+      return `events[${String(index)}].seq must be greater than the previous event's seq`;
+    }
+    previousSeq = seq;
     const problem = checkEvent(event);
     if (problem !== undefined) return `events[${String(index)}].${problem}`;
   }
   return undefined;
 }
 
+/** Fields of a `LogEvent` other than `seq`, which `checkEvents` checks together with its order. */
 function checkEvent(m: Fields): Problem {
   return (
-    required(m, 'seq', POSITIVE_INTEGER) ??
     required(m, 'ts', TIMESTAMP) ??
     required(m, 'level', LEVEL) ??
     required(m, 'service', NON_EMPTY_STRING) ??
@@ -178,7 +188,8 @@ function checkConfig(m: Fields): Problem {
 }
 
 function checkError(m: Fields): Problem {
-  return required(m, 'code', ERROR_CODE) ?? required(m, 'message', STRING);
+  // Any non-empty code: newer servers may add codes (see KNOWN_ERROR_CODES).
+  return required(m, 'code', NON_EMPTY_STRING) ?? required(m, 'message', STRING);
 }
 
 function checkConfigure(m: Fields): Problem {
@@ -187,6 +198,17 @@ function checkConfigure(m: Fields): Problem {
     optional(m, 'rate', NON_NEGATIVE_INTEGER) ??
     optional(m, 'scenario', SCENARIO)
   );
+}
+
+/** Copies the known fields of a checked `configure`; unknown fields from the network are dropped. */
+function pickConfigure(m: Fields): ConfigureMessage {
+  const { requestId, rate, scenario } = m;
+  return {
+    type: 'configure',
+    ...(typeof requestId === 'string' && { requestId }),
+    ...(typeof rate === 'number' && { rate }),
+    ...(isScenario(scenario) && { scenario }),
+  };
 }
 
 // --- Fields -------------------------------------------------------------------------------------
@@ -220,7 +242,12 @@ function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
-const KNOWN_ERROR_CODES: readonly unknown[] = ERROR_CODES;
+function isPositiveInteger(value: unknown): value is number {
+  return isNonNegativeInteger(value) && value !== 0;
+}
+
+/** The latest moment a JavaScript `Date` can represent, in epoch milliseconds. */
+const MAX_DATE_MS = 8.64e15;
 
 const STRING: Rule = { test: (value) => typeof value === 'string', expected: 'a string' };
 const NON_EMPTY_STRING: Rule = {
@@ -233,14 +260,11 @@ const NON_NEGATIVE_INTEGER: Rule = {
   test: isNonNegativeInteger,
   expected: 'a non-negative integer',
 };
-const POSITIVE_INTEGER: Rule = {
-  test: (value) => isNonNegativeInteger(value) && value !== 0,
-  expected: 'a positive integer',
-};
-/** Epoch milliseconds. */
+const POSITIVE_INTEGER: Rule = { test: isPositiveInteger, expected: 'a positive integer' };
+/** Epoch milliseconds that a `Date` can hold (rejects NaN and ±Infinity as well). */
 const TIMESTAMP: Rule = {
-  test: (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0,
-  expected: 'a non-negative finite number',
+  test: (value) => typeof value === 'number' && value >= 0 && value <= MAX_DATE_MS,
+  expected: `an epoch-ms timestamp from 0 to ${String(MAX_DATE_MS)}`,
 };
 const SEED: Rule = {
   test: (value) => isNonNegativeInteger(value) && value <= MAX_SEED,
@@ -248,7 +272,3 @@ const SEED: Rule = {
 };
 const LEVEL: Rule = { test: isLogLevel, expected: `one of ${LOG_LEVELS.join(', ')}` };
 const SCENARIO: Rule = { test: isScenario, expected: `one of ${SCENARIOS.join(', ')}` };
-const ERROR_CODE: Rule = {
-  test: (value) => KNOWN_ERROR_CODES.includes(value),
-  expected: `one of ${ERROR_CODES.join(', ')}`,
-};

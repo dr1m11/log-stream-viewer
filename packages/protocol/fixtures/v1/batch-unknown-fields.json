@@ -1,0 +1,18 @@
+{
+  "type": "batch",
+  "sentAt": 1791979204471,
+  "tick": 4087,
+  "events": [
+    {
+      "seq": 2196,
+      "ts": 1791979204455,
+      "level": "info",
+      "service": "search",
+      "host": "search-2c41-3",
+      "message": "Reindexed 120 documents",
+      "spanId": "00f067aa0ba902b7",
+      "region": "fra"
+    }
+  ],
+  "compression": { "algorithm": "deflate", "ratio": 4.8 }
+}
