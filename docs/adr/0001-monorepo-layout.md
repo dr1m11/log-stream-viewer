@@ -24,7 +24,8 @@ Use a pnpm workspace with three packages now and one more in B2:
 Boundaries, enforced by ESLint blocks in `eslint.config.js`:
 
 - `apps/web` and `apps/mock-server` never import each other (neither by package name nor by relative path); they share only `@lsv/protocol`.
-- `packages/*` use no React, DOM or Node APIs; `packages/protocol` also bans `ws` and Node built-ins. Their tsconfigs have no DOM lib, so browser APIs do not type-check either.
+- `packages/*` (protocol now, core from B2) use no React, DOM or Node APIs: imports of `react*`, `ws` and Node built-ins (`node:*` and bare names such as `fs`) are banned, as are browser and Node globals; only tests may use `node:*` modules to read fixtures. Their tsconfigs have no DOM lib, so browser APIs do not type-check either.
+- `packages/*` never import the apps (by package name or by a relative path into `apps/`); dependencies point from apps to packages only.
 - Every package is `"type": "module"`. Relative imports in `packages/*` and `apps/mock-server` end in `.ts` (`NodeNext` + `allowImportingTsExtensions`) and use erasable syntax only, so Node can run them without a build.
 
 Shared versions live in the pnpm `catalog`, shared compiler options in `tsconfig.base.json`, and each package registers its Vitest project in the root `vitest.config.ts`.

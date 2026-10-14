@@ -17,7 +17,7 @@ This repository differs in two ways: the mock server is Node code that should ru
 Reuse the flagship's baseline:
 
 - **TypeScript 6.0** (`6.0.3`, pinned in the pnpm catalog), kept below 6.1 until `typescript-eslint` supports newer versions. All compiler options are explicit in `tsconfig.base.json` (strict, `noUncheckedIndexedAccess`, `verbatimModuleSyntax`, `erasableSyntaxOnly`, …).
-- **ESLint 10** with `typescript-eslint` `strictTypeChecked` + `stylisticTypeChecked` through the project service; React rules (`@eslint-react`, `react-hooks`, `react-refresh`) and **`eslint-plugin-jsx-a11y-x`** (a maintained fork that supports ESLint 10) for `apps/web/src`; Vitest and Playwright plugins for tests. Boundary blocks keep `packages/protocol` and the two apps apart (see [0001](./0001-monorepo-layout.md)).
+- **ESLint 10** with `typescript-eslint` `strictTypeChecked` + `stylisticTypeChecked` through the project service; React rules (`@eslint-react`, `react-hooks`, `react-refresh`) and **`eslint-plugin-jsx-a11y-x`** (a maintained fork that supports ESLint 10) for `apps/web/src`; Vitest and Playwright plugins for tests. Boundary blocks keep `packages/*` and the two apps apart (see [0001](./0001-monorepo-layout.md)).
 - **Prettier** for formatting (with the Tailwind class-sorting plugin); ESLint does not format (`eslint-config-prettier`).
 - **Husky + lint-staged** run ESLint and Prettier on staged files; **commitlint** enforces Conventional Commits, a scope list and a `no-ai-attribution` rule. CI checks the PR title with the same config, because squash merges use it as the commit subject.
 - Plain JS tooling (configs, Claude Code hooks, `scripts/`) is type-checked with `checkJs` and JSDoc through the root `tsconfig.json`.
