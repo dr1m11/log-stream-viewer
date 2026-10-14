@@ -49,9 +49,10 @@ jobs:
 
       - name: Vitest with coverage thresholds
         run: pnpm test:coverage
+      # Fork PRs get a read-only token, so the comment only runs for branches of this repository.
       - name: Coverage report comment
-        if: always() && github.event_name == 'pull_request'
-        uses: davelosert/vitest-coverage-report-action@v2
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: davelosert/vitest-coverage-report-action@8f86cfb56ed6d5613ea8cdc5259f207fbfd51ece # v2.13.1
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@v7
