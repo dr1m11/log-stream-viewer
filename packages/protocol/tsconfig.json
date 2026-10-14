@@ -1,0 +1,6 @@
+{
+  // Solution file: the sources and the tests are type-checked as two programs (`tsc -b`) so that
+  // only the tests see Node types (they read golden fixtures with node:fs).
+  "files": [],
+  "references": [{ "path": "./tsconfig.lib.json" }, { "path": "./tsconfig.test.json" }]
+}

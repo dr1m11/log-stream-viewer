@@ -34,11 +34,38 @@ jobs:
       - name: Claude Code hook tests
         run: pnpm test:hooks
 
+  test:
+    name: Unit tests & coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+
+      - name: Vitest with coverage thresholds
+        run: pnpm test:coverage
+      # Fork PRs get a read-only token, so the comment only runs for branches of this repository.
+      - name: Coverage report comment
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: davelosert/vitest-coverage-report-action@8f86cfb56ed6d5613ea8cdc5259f207fbfd51ece # v2.13.1
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 14
+
   # Single required status check for branch protection; add every job to `needs`.
   ci-ok:
     name: CI OK
     if: always()
-    needs: [quality]
+    needs: [quality, test]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:

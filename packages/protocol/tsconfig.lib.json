@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.lib.tsbuildinfo",
+    // Node runs these sources directly (type stripping): explicit `.ts` in relative imports.
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    // No DOM lib and no ambient types: browser and Node APIs must not leak into the wire contract.
+    "lib": ["ES2023"],
+    "types": [],
+    "exactOptionalPropertyTypes": true
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.bench.ts"]
+}

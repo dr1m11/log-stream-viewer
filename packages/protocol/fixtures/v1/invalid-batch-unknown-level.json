@@ -1,0 +1,22 @@
+{
+  "type": "batch",
+  "sentAt": 1791979204371,
+  "events": [
+    {
+      "seq": 2161,
+      "ts": 1791979204322,
+      "level": "info",
+      "service": "api-gateway",
+      "host": "api-gateway-5d8b-1",
+      "message": "GET /api/orders/84211 200 in 38 ms"
+    },
+    {
+      "seq": 2162,
+      "ts": 1791979204330,
+      "level": "verbose",
+      "service": "search",
+      "host": "search-2c41-3",
+      "message": "Query plan cache hit"
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+{
+  "type": "error",
+  "code": "rate-limited",
+  "message": "Too many configure messages; wait before sending another"
+}

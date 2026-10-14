@@ -1,0 +1,10 @@
+{
+  "type": "hello",
+  "protocolVersion": 1,
+  "streamId": "st_01JA2R7QK3M9X4V8T6",
+  "resumed": false,
+  "serverTime": 1791979200000,
+  "stream": { "rate": 200, "scenario": "steady", "seed": 42 },
+  "limits": { "minRate": 10, "maxRate": 20000, "sessionMaxMs": 1800000 },
+  "expiresAt": 1791981000000
+}
