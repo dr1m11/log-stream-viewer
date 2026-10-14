@@ -1,0 +1,18 @@
+{
+  "name": "@lsv/protocol",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Log event model and WebSocket wire protocol shared by the mock server and the web app",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -b"
+  },
+  "devDependencies": {
+    "typescript": "catalog:"
+  }
+}

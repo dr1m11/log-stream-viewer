@@ -1,0 +1,66 @@
+{
+  "type": "batch",
+  "sentAt": 1791979204371,
+  "events": [
+    {
+      "seq": 2161,
+      "ts": 1791979204322,
+      "level": "info",
+      "service": "api-gateway",
+      "host": "api-gateway-5d8b-1",
+      "message": "GET /api/orders/84211 200 in 38 ms",
+      "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+      "payload": {
+        "http": { "method": "GET", "path": "/api/orders/84211", "status": 200 },
+        "latencyMs": 38,
+        "userId": "u_31842"
+      }
+    },
+    {
+      "seq": 2162,
+      "ts": 1791979204330,
+      "level": "debug",
+      "service": "search",
+      "host": "search-2c41-3",
+      "message": "Query plan cache hit"
+    },
+    {
+      "seq": 2163,
+      "ts": 1791979204341,
+      "level": "warn",
+      "service": "payments",
+      "host": "payments-7f9c-2",
+      "message": "Card processor responded slowly, retrying",
+      "traceId": "a3ce929d0e0e47364bf92f3577b34da6",
+      "payload": { "latencyMs": 2140, "attempt": 2, "provider": "acme-pay" }
+    },
+    {
+      "seq": 2164,
+      "ts": 1791979204356,
+      "level": "error",
+      "service": "orders",
+      "host": "orders-1a6e-1",
+      "message": "Failed to reserve stock for order 84211",
+      "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+      "payload": {
+        "orderId": 84211,
+        "error": {
+          "name": "StockReservationError",
+          "message": "Insufficient stock for SKU-1042",
+          "stack": "StockReservationError: Insufficient stock for SKU-1042\n    at reserve (inventory.ts:88:11)\n    at placeOrder (orders.ts:142:5)"
+        },
+        "retryable": false,
+        "tags": ["checkout", "inventory"],
+        "coupon": null
+      }
+    },
+    {
+      "seq": 2165,
+      "ts": 1791979204369,
+      "level": "trace",
+      "service": "notifications",
+      "host": "notifications-9b02-1",
+      "message": "Email queue polled, 0 jobs"
+    }
+  ]
+}

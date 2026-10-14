@@ -1,0 +1,15 @@
+{
+  "type": "batch",
+  "sentAt": 1791979204421,
+  "events": [
+    {
+      "seq": 2190,
+      "ts": 1791979204402,
+      "level": "fatal",
+      "service": "auth",
+      "host": "auth-4e7d-2",
+      "message": "Signing key store unavailable, shutting down"
+    }
+  ],
+  "dropped": 24
+}

@@ -1,0 +1,6 @@
+{
+  "type": "configure",
+  "requestId": "cfg-3",
+  "rate": 50000,
+  "scenario": "error-burst"
+}
