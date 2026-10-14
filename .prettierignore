@@ -1,0 +1,4 @@
+# Prettier also respects .gitignore
+pnpm-lock.yaml
+.claude/worktrees/
+.local/

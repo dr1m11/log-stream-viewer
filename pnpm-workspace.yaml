@@ -1,0 +1,23 @@
+packages:
+  - apps/*
+  - packages/*
+
+# Single source of truth for versions shared across workspace packages.
+# TypeScript is capped below 6.1 until typescript-eslint supports newer versions (see docs/adr/0002).
+catalog:
+  '@types/node': 24.19.2
+  typescript: 6.0.3
+
+engineStrict: true
+saveExact: true
+
+# Packages allowed to run install scripts (pnpm blocks them by default).
+# esbuild and workerd arrive with Vite and Wrangler in apps/web.
+onlyBuiltDependencies:
+  - esbuild
+  - workerd
+
+overrides:
+  # eslint-plugin-react-hooks 7.1.1 imports `zod-validation-error/v4` but its range also allows 3.x,
+  # which has no such entry point. Remove once the plugin tightens its range.
+  eslint-plugin-react-hooks>zod-validation-error: 4.0.2

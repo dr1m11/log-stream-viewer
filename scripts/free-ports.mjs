@@ -63,9 +63,11 @@ function listListeners(ports) {
       `[pscustomobject]@{ port = [int]$_.LocalPort; pid = [int]$_.OwningProcess; cmd = [string]$p.CommandLine } }`,
       `| ConvertTo-Json -Compress`,
     ].join(' ');
-    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
-      encoding: 'utf8',
-    });
+    const result = spawnSync(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', script],
+      { encoding: 'utf8' },
+    );
     return parseWindowsListeners(result.stdout ?? '');
   }
   return ports.flatMap((port) => {
@@ -85,7 +87,9 @@ function listListeners(ports) {
 /** @param {number} pid */
 function stop(pid) {
   if (process.platform === 'win32') {
-    return spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { encoding: 'utf8' }).status === 0;
+    return (
+      spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { encoding: 'utf8' }).status === 0
+    );
   }
   try {
     process.kill(pid, 'SIGTERM');
@@ -102,7 +106,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   if (listeners.length === 0) console.log(`Ports ${ports.join(', ')} are free.`);
   for (const { port, pid, cmd } of listeners) {
     if (!isOwnProcess(cmd)) {
-      console.log(`:${port} is used by another project (PID ${pid}: ${cmd || 'unknown'}); left running.`);
+      console.log(
+        `:${port} is used by another project (PID ${pid}: ${cmd || 'unknown'}); left running.`,
+      );
       continue;
     }
     console.log(`:${port} PID ${pid} ${stop(pid) ? 'stopped' : 'could not be stopped'}.`);

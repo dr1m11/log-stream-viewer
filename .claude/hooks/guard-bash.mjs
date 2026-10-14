@@ -6,6 +6,8 @@ import { AI_ATTRIBUTION_RE, fail, git, isMain, PROJECT_DIR, readInput } from './
 
 const CONVENTIONAL_TITLE_RE =
   /^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([a-z0-9-]+\))?!?: \S.*$/;
+// NUL delimits the placeholders of maskQuoted: it cannot occur in a shell command.
+// eslint-disable-next-line no-control-regex -- the control character is the point
 const PLACEHOLDER_RE = /\u0000(\d+)\u0000/g;
 const CHANGE_DIR_RE = /^(cd|chdir|pushd|set-location|sl|push-location)$/i;
 
@@ -207,7 +209,9 @@ function longRunningBinary(tokens) {
     case 'docker': {
       const detached = args.some((a) => a === '--detach' || /^-[a-zA-Z]*d[a-zA-Z]*$/.test(a));
       if (args[0] === 'run' && !detached) return 'docker run (add -d)';
-      if (args[0] === 'compose' && args.includes('up') && !detached) return 'docker compose up (add -d)';
+      if (args[0] === 'compose' && args.includes('up') && !detached) {
+        return 'docker compose up (add -d)';
+      }
       return null;
     }
     default:

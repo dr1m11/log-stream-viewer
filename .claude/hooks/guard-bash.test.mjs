@@ -69,11 +69,17 @@ describe('checkCommand', () => {
 
   it('judges git -C commits by the target directory', () => {
     assert.equal(checkCommand(`git -C "${worktree}" commit -m "feat: x"`, inMain), null);
-    assert.equal(checkCommand('git -C .claude/worktrees/agent-1 commit -m "feat: x"', inMain), null);
+    assert.equal(
+      checkCommand('git -C .claude/worktrees/agent-1 commit -m "feat: x"', inMain),
+      null,
+    );
   });
 
   it('judges commits after cd / Set-Location by the new directory', () => {
-    assert.equal(checkCommand('cd .claude/worktrees/agent-1 && git commit -m "feat: x"', inMain), null);
+    assert.equal(
+      checkCommand('cd .claude/worktrees/agent-1 && git commit -m "feat: x"', inMain),
+      null,
+    );
     assert.equal(
       checkCommand(`Set-Location -Path '${worktree}'; git commit -m "feat: x"`, inMain),
       null,

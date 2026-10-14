@@ -13,7 +13,7 @@ Requested change: `$ARGUMENTS`.
 2. Classify the change and say it out loud before editing:
    - **Additive** — a new optional field or a new message type. Same `PROTOCOL_VERSION`; old clients ignore it, old servers never send it.
    - **Breaking** — renaming/removing a field, changing a type or meaning, making a field required. Bump `PROTOCOL_VERSION`; the server must still serve the previous version (or close it with 4001 so the page reloads) because PR previews and open tabs use the production server.
-   Prefer an additive design when one exists.
+     Prefer an additive design when one exists.
 3. `packages/protocol`: update the types, the guard in `parse.ts` (envelope and scalars only), constants or close codes, and add or update golden fixtures in `fixtures/v1/` (or `fixtures/v<N>/`). Tests: valid fixtures parse, malformed variants return an error `Result`.
 4. `apps/mock-server`: produce/handle the new shape in `session.ts`/`server.ts`; extend the integration test (real `ws` client on port 0) to cover it.
 5. `apps/web`: update the consumer (stream client, stores). Unknown message types must stay ignored; UI limits come from `hello.limits`.

@@ -14,7 +14,7 @@ Arguments: `$ARGUMENTS` — optional rate and scenario. Requires `apps/web` and 
 3. Wait for both without `sleep`:
    - `curl -s --retry 30 --retry-delay 1 --retry-connrefused http://localhost:8787/healthz` → JSON with `"status":"ok"`;
    - `curl -s -o /dev/null -w "%{http_code}" --retry 30 --retry-delay 1 --retry-connrefused http://localhost:5173/` → `200`.
-   If either fails, read the background task output and report the error instead of retrying blindly.
+     If either fails, read the background task output and report the error instead of retrying blindly.
 4. With the chrome-devtools MCP server: open `http://localhost:5173/?rate=<rate>&scenario=<scenario>` in a new page, wait for the text "Connected", take a snapshot.
 5. Check the stream: take a second snapshot ~2 s later and confirm the received-events counter grew; list console messages (expect none at error level) and network requests (one WebSocket to `ws://localhost:8787/ws`).
 6. If the task is about performance, record a trace (`performance_start_trace` / `performance_stop_trace`) while the stream runs and summarize the insights (long tasks, INP, layout shifts) with numbers.

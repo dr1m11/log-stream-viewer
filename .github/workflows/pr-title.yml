@@ -1,0 +1,42 @@
+name: PR title
+
+# PRs are squash-merged and the PR title becomes the commit subject on main,
+# so it goes through the same commitlint rules as local commits.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-title-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  title:
+    name: Semantic PR title
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+
+      - name: Lint PR title with commitlint
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: printf '%s\n' "$PR_TITLE" | pnpm exec commitlint --verbose
+
+      - name: Reject AI attribution in the PR description
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          node --input-type=module -e "
+            import { AI_ATTRIBUTION_RE } from './.claude/hooks/_lib.mjs';
+            if (AI_ATTRIBUTION_RE.test(process.env.PR_BODY ?? '')) {
+              console.error('The PR description contains AI attribution. Remove it.');
+              process.exit(1);
+            }
+          "
