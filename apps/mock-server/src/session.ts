@@ -2,8 +2,8 @@ import {
   CLOSE_CODES,
   type ConfigMessage,
   type ConfigureMessage,
-  type ErrorCode,
   HEARTBEAT_INTERVAL_MS,
+  type KnownErrorCode,
   parseClientMessage,
   PROTOCOL_VERSION,
   type ServerMessage,
@@ -237,7 +237,7 @@ export class Session {
     return true;
   }
 
-  #sendError(code: ErrorCode, message: string): void {
+  #sendError(code: KnownErrorCode, message: string): void {
     this.#send({ type: 'error', code, message });
   }
 

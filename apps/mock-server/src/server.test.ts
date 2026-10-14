@@ -5,6 +5,7 @@ import { request } from 'node:http';
 import {
   busyCloseReason,
   CLOSE_CODES,
+  isKnownErrorCode,
   type LogEvent,
   MAX_CLIENT_MESSAGE_BYTES,
   parseServerMessage,
@@ -19,8 +20,8 @@ import { BUSY_RETRY_AFTER_S, createServer, type MockServer, type ServerDeps } fr
 
 // --- Fixtures -------------------------------------------------------------------------------------
 
-const FIXTURES = new URL('../../../packages/protocol/fixtures/v1/', import.meta.url);
-const fixtureText = (name: string): string => readFileSync(new URL(name, FIXTURES), 'utf8');
+const fixtureText = (name: string): string =>
+  readFileSync(new URL(import.meta.resolve(`@lsv/protocol/fixtures/v1/${name}`)), 'utf8');
 const fixture = (name: string): unknown => JSON.parse(fixtureText(name));
 
 /** The structure of a JSON value: keys and `typeof` of the leaves, the first item of arrays. */
@@ -252,6 +253,25 @@ describe('mock server', () => {
     expect(logs.find((line) => line.startsWith('connect '))).toMatch(/ ignored=scenario /);
   });
 
+  it('ignores a resume request and starts a new stream (reserved for B4)', async () => {
+    const { url, logs } = await start();
+    const client = new TestClient(`${url}?v=1&resume=st_previous&after=2190`);
+    const hello = await client.next('hello');
+    expect(hello.resumed).toBe(false);
+    expect(hello.streamId).not.toBe('st_previous');
+    const first = await client.next('batch');
+    expect(first.events[0]?.seq).toBe(1);
+    expect(logs.find((line) => line.startsWith('connect '))).toMatch(/ resume=ignored /);
+  });
+
+  it('logs the cut value of an invalid version', async () => {
+    const { url, logs } = await start();
+    const client = new TestClient(`${url}?v=${'9'.repeat(200)}x`);
+    expect((await client.closed).code).toBe(CLOSE_CODES.unsupportedVersion);
+    const line = logs.find((entry) => entry.startsWith('reject code=4001')) ?? '';
+    expect(line).toMatch(/ problem=not-an-integer v="9{64}" /);
+  });
+
   it('rejects a foreign Origin with 403 before the upgrade', async () => {
     const { port, logs } = await start();
     expect(await handshake(port, '/ws?v=1', { Origin: 'https://evil.example' })).toBe(403);
@@ -365,8 +385,15 @@ describe('mock server', () => {
     const { url } = await start();
     const client = new TestClient(`${url}?v=1&rate=200`);
     await client.next('hello');
-    client.send(fixtureText('invalid-unknown-type.json'));
-    expect(await client.next('error')).toEqual(fixture('error.json'));
+    client.send(fixtureText('invalid-client-unknown-type.json'));
+    const error = await client.next('error');
+    expect(error).toEqual({
+      type: 'error',
+      code: 'unsupported',
+      message: 'Unknown message type "pause"',
+    });
+    expect(shapeOf(error)).toEqual(shapeOf(fixture('error.json')));
+    expect(isKnownErrorCode(error.code)).toBe(true);
     client.send(Buffer.from([1, 2, 3]));
     await client.waitFor(
       (message): message is MessageOf<'error'> =>

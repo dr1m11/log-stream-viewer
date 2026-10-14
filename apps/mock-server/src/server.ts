@@ -259,12 +259,15 @@ export function createServer(
   function accept(ws: WebSocket, ip: string, query: string): void {
     const parsed = parseConnectionQuery(query);
     if (!parsed.ok || parsed.value.params.version !== PROTOCOL_VERSION) {
-      const version = parsed.ok ? String(parsed.value.params.version) : parsed.error.problem;
+      // The issue value is already cut to MAX_ISSUE_VALUE_LENGTH by the protocol parser.
+      const detail = parsed.ok
+        ? `v=${String(parsed.value.params.version)}`
+        : `problem=${parsed.error.problem} v=${quote(parsed.error.value)}`;
       reject(
         ws,
         CLOSE_CODES.unsupportedVersion,
         'unsupported protocol version',
-        `reason=version v=${quote(version)} ip=${quote(ip)}`,
+        `reason=version ${detail} ip=${quote(ip)}`,
       );
       return;
     }
@@ -329,9 +332,12 @@ export function createServer(
     session.start();
     const { rate, scenario, seed } = session.settings;
     const skipped = ignored.map((issue) => issue.param).join(',');
+    // Resume is reserved for B4 (docs/protocol.md): a B1 server always starts a new stream.
+    const resume = params.resume === undefined ? '' : ' resume=ignored';
     log(
       `connect stream=${session.streamId} ip=${quote(ip)} rate=${String(rate)} scenario=${scenario} ` +
-        `seed=${String(seed)}${skipped === '' ? '' : ` ignored=${skipped}`} connections=${String(hub.size)}`,
+        `seed=${String(seed)}${skipped === '' ? '' : ` ignored=${skipped}`}${resume} ` +
+        `connections=${String(hub.size)}`,
     );
   }
 

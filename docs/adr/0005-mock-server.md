@@ -50,6 +50,8 @@ The same seed, scenario and sequence of `next(count, now)` calls give the same e
 
 Events the budget does not grant are never generated (the effective rate drops, `seq` stays continuous). **Backpressure** is different: while `bufferedAmount` exceeds 4 MiB the session skips generation but still assigns the `seq` numbers, so the client sees the gap and the next batch reports `dropped`.
 
+**Client messages.** The server sends only the known `error` codes. A malformed frame, a binary frame or a `configure` with an invalid field (for example a scenario this server does not know) gets `error` / `bad-message` and changes nothing; an unknown type gets `error` / `unsupported`; the socket stays open in every case. Unknown fields of `configure` are dropped by the parser. `resume` / `after` are parsed and ignored until B4: every connection starts a new stream with `resumed: false` (logged as `resume=ignored`).
+
 **Admission and limits.**
 
 | Limit                       | Default                                                            | Behaviour                                                                                             |

@@ -20,8 +20,8 @@ import {
   type SessionSocket,
 } from './session.ts';
 
-const FIXTURES = new URL('../../../packages/protocol/fixtures/v1/', import.meta.url);
-const fixture = (name: string): string => readFileSync(new URL(name, FIXTURES), 'utf8');
+const fixture = (name: string): string =>
+  readFileSync(new URL(import.meta.resolve(`@lsv/protocol/fixtures/v1/${name}`)), 'utf8');
 
 type MessageOf<T extends ServerMessage['type']> = Extract<ServerMessage, { type: T }>;
 
@@ -229,8 +229,14 @@ describe('Session', () => {
 
   it('answers an unknown message type with error unsupported (golden fixtures)', () => {
     const { socket, session } = open();
-    session.receive(fixture('invalid-unknown-type.json'), T0);
-    expect(socket.messages.at(-1)).toEqual(JSON.parse(fixture('error.json')));
+    session.receive(fixture('invalid-client-unknown-type.json'), T0);
+    const golden: unknown = JSON.parse(fixture('error.json'));
+    expect(golden).toMatchObject({ type: 'error', code: 'unsupported' });
+    expect(socket.messages.at(-1)).toEqual({
+      type: 'error',
+      code: 'unsupported',
+      message: 'Unknown message type "pause"',
+    });
     expect(socket.closes).toEqual([]);
   });
 
@@ -238,12 +244,28 @@ describe('Session', () => {
     ['not JSON', '{"type":'],
     ['not an object', '[1,2]'],
     ['an invalid configure', fixture('invalid-configure-rate-string.json')],
-  ])('answers %s with error bad-message and keeps streaming', (_, raw) => {
+    ['a configure with an unknown scenario', '{"type":"configure","scenario":"deploy"}'],
+  ])('answers %s with error bad-message and keeps streaming unchanged', (_, raw) => {
     const { socket, session } = open();
     session.receive(raw, T0);
     expect(socket.messages.at(-1)).toMatchObject({ type: 'error', code: 'bad-message' });
+    expect(session.settings).toEqual({ rate: 200, scenario: 'steady', seed: 42 });
     run(session, T0, T0 + 100);
     expect(socket.events()).toEqual(range(1, 20));
+  });
+
+  it('ignores unknown fields of configure', () => {
+    const { socket, session } = open();
+    session.receive(
+      JSON.stringify({ type: 'configure', requestId: 'r2', rate: 500, pauseAfter: 3 }),
+      T0,
+    );
+    expect(socket.messages.at(-1)).toEqual({
+      type: 'config',
+      requestId: 'r2',
+      rate: 500,
+      scenario: 'steady',
+    });
   });
 
   it('treats a binary frame like a malformed message', () => {
