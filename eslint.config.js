@@ -73,6 +73,13 @@ const SERVER_IMPORT_BANS = [
   { regex: REACT_RE, message: 'The mock server does not use React (see docs/adr/0001).' },
   ...otherAppImports('web'),
 ];
+const PURE_SERVER_MESSAGE =
+  'The generator, scheduler, budget and hub are pure: no Node APIs, sockets, wall clock or Math.random — take time as an argument and randomness from the seeded Prng (see .claude/rules/mock-server.md).';
+/** @type {ImportPattern[]} */
+const PURE_SERVER_IMPORT_BANS = [
+  { regex: NODE_BUILTINS_RE, message: PURE_SERVER_MESSAGE },
+  { regex: '^ws(/|$)', message: PURE_SERVER_MESSAGE },
+];
 /** @type {ImportPattern[]} */
 const APPS_FROM_PACKAGES_BANS = [
   {
@@ -160,6 +167,26 @@ export default defineConfig(
     files: ['apps/mock-server/**/*.ts'],
     languageOptions: { globals: globals.node },
     rules: { 'no-restricted-imports': restrictImports(SERVER_IMPORT_BANS) },
+  },
+  {
+    // Deterministic core of the server: a seed and a fake clock must reproduce a stream exactly.
+    files: [
+      'apps/mock-server/src/generator/**/*.ts',
+      'apps/mock-server/src/{scheduler,budget,hub}.ts',
+    ],
+    rules: {
+      'no-restricted-imports': restrictImports(SERVER_IMPORT_BANS, PURE_SERVER_IMPORT_BANS),
+      'no-restricted-globals': [
+        'error',
+        ...['Date', 'performance', 'process', 'Buffer', 'setTimeout', 'setInterval'].map(
+          (name) => ({ name, message: PURE_SERVER_MESSAGE }),
+        ),
+      ],
+      'no-restricted-properties': [
+        'error',
+        { object: 'Math', property: 'random', message: PURE_SERVER_MESSAGE },
+      ],
+    },
   },
   {
     // protocol now, core from B2: plain TypeScript without React, DOM, Node or the apps.
