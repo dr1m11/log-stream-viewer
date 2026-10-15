@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <meta
+      name="description"
+      content="Real-time log stream viewer: a WebSocket stream of thousands of events per second, rendered in the browser."
+    />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>Log Stream Viewer</title>
+    <!-- Sets data-theme before first paint (no light/dark flash); external to keep the CSP strict. -->
+    <script src="/theme-init.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

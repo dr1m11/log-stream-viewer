@@ -1,0 +1,57 @@
+/*
+ * Design tokens. Components never use raw colours: they use the Tailwind utilities generated
+ * from these variables in index.css (bg-surface, text-fg-muted, border-border, text-level-error…).
+ * The theme is selected with [data-theme] on <html>, set before first paint by /theme-init.js.
+ *
+ * Text colours (fg, fg-muted, accent, success, danger and the level colours) keep at least 4.5:1
+ * (WCAG AA for normal text) against both surface and surface-raised, in both themes; the lowest is
+ * 5.3:1 (light debug and warn on surface). Re-check after changing any of them.
+ */
+
+:root,
+[data-theme='light'] {
+  color-scheme: light;
+
+  /* Page background, and panels or the header drawn on top of it. */
+  --lsv-surface: oklch(0.975 0.004 265);
+  --lsv-surface-raised: oklch(1 0 0);
+  --lsv-fg: oklch(0.22 0.02 265);
+  --lsv-fg-muted: oklch(0.47 0.02 265);
+  --lsv-border: oklch(0.89 0.007 265);
+  --lsv-focus: oklch(0.55 0.2 262);
+  --lsv-accent: oklch(0.5 0.17 262);
+  --lsv-success: oklch(0.5 0.13 150);
+  --lsv-danger: oklch(0.52 0.19 27);
+
+  /* Log levels, from the least to the most severe. */
+  --lsv-level-trace: oklch(0.5 0.02 265);
+  --lsv-level-debug: oklch(0.5 0.09 210);
+  --lsv-level-info: oklch(0.5 0.15 255);
+  --lsv-level-warn: oklch(0.52 0.12 65);
+  --lsv-level-error: oklch(0.52 0.19 27);
+  --lsv-level-fatal: oklch(0.48 0.2 340);
+
+  --lsv-font-mono:
+    ui-monospace, 'SFMono-Regular', 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  --lsv-surface: oklch(0.16 0.01 265);
+  --lsv-surface-raised: oklch(0.215 0.012 265);
+  --lsv-fg: oklch(0.95 0.005 265);
+  --lsv-fg-muted: oklch(0.74 0.015 265);
+  --lsv-border: oklch(0.33 0.014 265);
+  --lsv-focus: oklch(0.74 0.13 262);
+  --lsv-accent: oklch(0.74 0.13 262);
+  --lsv-success: oklch(0.76 0.14 150);
+  --lsv-danger: oklch(0.72 0.16 25);
+
+  --lsv-level-trace: oklch(0.72 0.02 265);
+  --lsv-level-debug: oklch(0.76 0.09 210);
+  --lsv-level-info: oklch(0.74 0.12 255);
+  --lsv-level-warn: oklch(0.8 0.13 80);
+  --lsv-level-error: oklch(0.72 0.16 25);
+  --lsv-level-fatal: oklch(0.74 0.16 340);
+}

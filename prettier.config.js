@@ -7,8 +7,9 @@ const config = {
   trailingComma: 'all',
   endOfLine: 'lf',
   plugins: ['prettier-plugin-tailwindcss'],
-  // Sorts Tailwind classes, including inside cn() and cva() calls. `tailwindStylesheet` (the app's
-  // theme entry CSS) is added together with apps/web.
+  // Sorts Tailwind classes using the app's theme (so token utilities such as text-level-error sort
+  // like built-in ones), including inside cn() and cva() calls.
+  tailwindStylesheet: './apps/web/src/app/styles/index.css',
   tailwindFunctions: ['cn', 'cva'],
 };
 

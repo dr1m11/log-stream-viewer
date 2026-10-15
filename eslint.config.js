@@ -69,6 +69,13 @@ const APPS_FROM_PACKAGES_MESSAGE =
 /** @type {ImportPattern[]} */
 const WEB_IMPORT_BANS = otherAppImports('mock-server');
 /** @type {ImportPattern[]} */
+const WEB_TEST_DOUBLE_BANS = [
+  {
+    group: ['@/shared/lib/testing', '@/shared/lib/testing/*'],
+    message: 'Test doubles are for *.test.ts(x) files only; keep them out of the app bundle.',
+  },
+];
+/** @type {ImportPattern[]} */
 const SERVER_IMPORT_BANS = [
   { regex: REACT_RE, message: 'The mock server does not use React (see docs/adr/0001).' },
   ...otherAppImports('web'),
@@ -161,6 +168,11 @@ export default defineConfig(
   {
     files: ['apps/web/**/*.{ts,tsx}'],
     rules: { 'no-restricted-imports': restrictImports(WEB_IMPORT_BANS) },
+  },
+  {
+    files: ['apps/web/src/**/*.{ts,tsx}'],
+    ignores: ['**/*.test.{ts,tsx}', 'apps/web/src/shared/lib/testing/**'],
+    rules: { 'no-restricted-imports': restrictImports(WEB_IMPORT_BANS, WEB_TEST_DOUBLE_BANS) },
   },
   {
     // Node 24 runs the server's TypeScript directly (type stripping); it never touches React or the web app.

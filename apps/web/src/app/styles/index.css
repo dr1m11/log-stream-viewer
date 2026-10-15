@@ -1,0 +1,45 @@
+@import 'tailwindcss';
+@import './tokens.css';
+
+/* `dark:` utilities follow the [data-theme] attribute, not only the OS preference. */
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+/* Expose tokens as Tailwind utilities: bg-surface, text-fg-muted, border-border, font-mono… */
+@theme inline {
+  --color-surface: var(--lsv-surface);
+  --color-surface-raised: var(--lsv-surface-raised);
+  --color-fg: var(--lsv-fg);
+  --color-fg-muted: var(--lsv-fg-muted);
+  --color-border: var(--lsv-border);
+  --color-focus: var(--lsv-focus);
+  --color-accent: var(--lsv-accent);
+  --color-success: var(--lsv-success);
+  --color-danger: var(--lsv-danger);
+  --color-level-trace: var(--lsv-level-trace);
+  --color-level-debug: var(--lsv-level-debug);
+  --color-level-info: var(--lsv-level-info);
+  --color-level-warn: var(--lsv-level-warn);
+  --color-level-error: var(--lsv-level-error);
+  --color-level-fatal: var(--lsv-level-fatal);
+  --font-mono: var(--lsv-font-mono);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    background-color: var(--color-surface);
+    color: var(--color-fg);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* One visible focus style for every interactive element, keyboard focus only. */
+  :focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+  }
+}

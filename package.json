@@ -11,9 +11,11 @@
     "node": ">=24.15.0"
   },
   "scripts": {
-    "dev": "pnpm --recursive --parallel --if-present dev",
+    "dev": "pnpm --parallel --filter @lsv/mock-server --filter @lsv/web dev",
+    "dev:web": "pnpm --filter @lsv/web dev",
     "dev:server": "pnpm --filter @lsv/mock-server dev",
     "build": "pnpm --recursive --if-present build",
+    "preview": "pnpm --filter @lsv/web preview",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint . --max-warnings=0",
