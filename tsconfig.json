@@ -7,5 +7,5 @@
     "checkJs": true,
     "types": ["node"]
   },
-  "include": ["*.js", "*.mjs", "*.ts", ".claude/hooks/*.mjs", "scripts/*.mjs"]
+  "include": ["*.js", "*.mjs", "*.ts", ".claude/hooks/*.mjs", "scripts/*.mjs", "scripts/*.ts"]
 }
