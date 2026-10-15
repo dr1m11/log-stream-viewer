@@ -2,6 +2,7 @@ import {
   type BatchMessage,
   buildConnectionUrl,
   CLOSE_CODES,
+  HEARTBEAT_INTERVAL_MS,
   type HeartbeatMessage,
   type HelloMessage,
   parseServerMessage,
@@ -19,6 +20,23 @@ export interface StreamRequest {
   readonly seed?: number;
 }
 
+/**
+ * Standard close codes `onClose` reports for failures the browser or this client detects itself;
+ * the mock server never sends them (its codes are in the protocol's `CLOSE_CODES`).
+ */
+export const SOCKET_FAILURE_CODES = {
+  /** The server broke the protocol: no valid `hello` in time. The reason says what happened. */
+  protocolError: 1002,
+  /**
+   * The connection dropped or never opened. Browsers give no reason; a non-empty reason comes from
+   * this client and explains why the socket could not be created (malformed URL, mixed content).
+   */
+  abnormalClosure: 1006,
+} as const;
+
+/** How long the server may take to send `hello` once the socket is open. */
+export const HELLO_TIMEOUT_MS = 2 * HEARTBEAT_INTERVAL_MS;
+
 /** Callbacks of a {@link StreamSocket}; none of them runs after `close()`. */
 export interface StreamSocketHandlers {
   /** The server accepted the connection and describes the stream (first message). */
@@ -28,8 +46,8 @@ export interface StreamSocketHandlers {
   /** A frame was dropped because it is not a valid message (`invalid-json` / `invalid-message`). */
   readonly onInvalidFrame?: (error: ProtocolError) => void;
   /**
-   * The connection ended: the server's close code and reason, 1006 when it dropped, or 4001 when
-   * the server speaks another protocol version. Called at most once.
+   * The connection ended: the server's close code and reason; 4001 when the server speaks another
+   * protocol version; or one of {@link SOCKET_FAILURE_CODES}. Called at most once, asynchronously.
    */
   readonly onClose?: (code: number, reason: string) => void;
 }
@@ -56,14 +74,22 @@ export function openStreamSocket(
   handlers: StreamSocketHandlers,
 ): StreamSocket {
   const url = buildConnectionUrl(endpoint, { version: PROTOCOL_VERSION, ...request });
-  const socket = new WebSocket(url);
+  let socket: WebSocket;
+  try {
+    socket = new WebSocket(url);
+  } catch (error) {
+    // SyntaxError for a malformed URL, SecurityError for ws: from an https page.
+    return unopenedSocket(url, error, handlers);
+  }
   let invalidFrames = 0;
   let done = false;
+  let helloTimer: ReturnType<typeof setTimeout> | undefined;
 
   function detach(): void {
     socket.onopen = null;
     socket.onmessage = null;
     socket.onclose = null;
+    clearTimeout(helloTimer);
   }
 
   function end(code: number, reason: string): void {
@@ -73,11 +99,25 @@ export function openStreamSocket(
     handlers.onClose?.(code, reason);
   }
 
+  /** Closes the socket because of something the server sent (or did not send). */
+  function abandon(code: number, reason: string): void {
+    socket.close(CLOSE_CODES.normal);
+    end(code, reason);
+  }
+
   function invalid(error: ProtocolError): void {
     invalidFrames++;
     handlers.onInvalidFrame?.(error);
   }
 
+  socket.onopen = () => {
+    helloTimer = setTimeout(() => {
+      abandon(
+        SOCKET_FAILURE_CODES.protocolError,
+        `server did not complete the handshake within ${String(HELLO_TIMEOUT_MS / 1000)} s`,
+      );
+    }, HELLO_TIMEOUT_MS);
+  };
   socket.onmessage = (event: MessageEvent) => {
     const data: unknown = event.data;
     if (typeof data !== 'string') {
@@ -92,10 +132,10 @@ export function openStreamSocket(
     const message = parsed.value;
     switch (message.type) {
       case 'hello':
+        clearTimeout(helloTimer);
         if (message.protocolVersion !== PROTOCOL_VERSION) {
           // A server that answers in another version cannot be read; like 4001, only a reload helps.
-          socket.close(CLOSE_CODES.normal);
-          end(
+          abandon(
             CLOSE_CODES.unsupportedVersion,
             `server speaks protocol v${String(message.protocolVersion)}`,
           );
@@ -137,6 +177,25 @@ export function openStreamSocket(
       } else if (socket.readyState === WebSocket.OPEN) {
         socket.close(CLOSE_CODES.normal);
       }
+    },
+  };
+}
+
+/**
+ * Stands in for a socket the browser refused to create: reports the error like a connection that
+ * never opened, from a microtask, so the caller holds the `StreamSocket` before `onClose` runs.
+ */
+function unopenedSocket(url: string, error: unknown, handlers: StreamSocketHandlers): StreamSocket {
+  let closed = false;
+  const reason = error instanceof Error ? error.message : String(error);
+  queueMicrotask(() => {
+    if (!closed) handlers.onClose?.(SOCKET_FAILURE_CODES.abnormalClosure, reason);
+  });
+  return {
+    url,
+    invalidFrames: 0,
+    close() {
+      closed = true;
     },
   };
 }

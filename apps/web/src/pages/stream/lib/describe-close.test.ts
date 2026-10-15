@@ -31,4 +31,21 @@ describe('describeClose', () => {
     expect(describeClose(1006, '', true).title).toBe('Connection lost');
     expect(describeClose(1006, '', false).title).toBe('Server unreachable');
   });
+
+  it('passes on why the browser refused to open the socket', () => {
+    expect(
+      describeClose(1006, 'An insecure WebSocket connection may not be initiated', false),
+    ).toEqual({
+      title: 'Cannot open the connection',
+      advice: 'An insecure WebSocket connection may not be initiated',
+    });
+  });
+
+  it('names the protocol error the client detected', () => {
+    expect(describeClose(1002, 'server did not complete the handshake within 2 s', true)).toEqual({
+      title: 'Protocol error: server did not complete the handshake within 2 s',
+      advice: 'Reload the page to reconnect.',
+    });
+    expect(describeClose(1002, '', true).title).toBe('Protocol error');
+  });
 });

@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FakeWebSocket } from '@/shared/lib/testing';
 
-import { openStreamSocket, type StreamRequest } from './stream-socket';
+import { HELLO_TIMEOUT_MS, openStreamSocket, type StreamRequest } from './stream-socket';
 
 const ENDPOINT = 'ws://localhost:8787/ws';
 
@@ -19,14 +19,18 @@ function parsed(frame: string): unknown {
   return JSON.parse(frame);
 }
 
-function connect(request: StreamRequest = {}) {
-  const handlers = {
+function spyHandlers() {
+  return {
     onHello: vi.fn(),
     onBatch: vi.fn(),
     onHeartbeat: vi.fn(),
     onInvalidFrame: vi.fn(),
     onClose: vi.fn(),
   };
+}
+
+function connect(request: StreamRequest = {}) {
+  const handlers = spyHandlers();
   const stream = openStreamSocket(ENDPOINT, request, handlers);
   return { stream, handlers, socket: FakeWebSocket.latest() };
 }
@@ -38,7 +42,83 @@ describe('openStreamSocket', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it('reports a socket the browser refuses to create as a connection that never opened', async () => {
+    vi.stubGlobal(
+      'WebSocket',
+      vi.fn(function refuse() {
+        throw new SyntaxError("The URL 'ws://x/ws#a' contains a fragment identifier");
+      }),
+    );
+    const handlers = spyHandlers();
+
+    const stream = openStreamSocket('ws://x/ws#a', {}, handlers);
+    expect(handlers.onClose).not.toHaveBeenCalled();
+    await Promise.resolve();
+
+    expect(handlers.onClose).toHaveBeenCalledExactlyOnceWith(
+      1006,
+      "The URL 'ws://x/ws#a' contains a fragment identifier",
+    );
+    expect(stream.invalidFrames).toBe(0);
+  });
+
+  it('stays silent about a refused socket that is closed right away', async () => {
+    vi.stubGlobal(
+      'WebSocket',
+      vi.fn(function refuse() {
+        throw new DOMException(
+          'An insecure WebSocket connection may not be initiated',
+          'SecurityError',
+        );
+      }),
+    );
+    const handlers = spyHandlers();
+
+    openStreamSocket(ENDPOINT, {}, handlers).close();
+    await Promise.resolve();
+
+    expect(handlers.onClose).not.toHaveBeenCalled();
+  });
+
+  it('gives up when the server sends no hello in time after the socket opens', () => {
+    vi.useFakeTimers();
+    const { socket, handlers } = connect();
+    socket.open();
+    socket.receive(invalidHelloFrame);
+
+    vi.advanceTimersByTime(HELLO_TIMEOUT_MS - 1);
+    expect(handlers.onClose).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+
+    expect(socket.closedWith?.code).toBe(1000);
+    expect(handlers.onClose).toHaveBeenCalledExactlyOnceWith(
+      1002,
+      'server did not complete the handshake within 2 s',
+    );
+  });
+
+  it('stops waiting for hello once it arrives or the connection ends', () => {
+    vi.useFakeTimers();
+    const answered = connect();
+    answered.socket.open();
+    answered.socket.receive(helloFrame);
+    const dropped = connect();
+    dropped.socket.open();
+    dropped.socket.closeFromServer(1006);
+    const closed = connect();
+    closed.socket.open();
+    closed.stream.close();
+
+    vi.advanceTimersByTime(10 * HELLO_TIMEOUT_MS);
+
+    expect(answered.handlers.onClose).not.toHaveBeenCalled();
+    expect(answered.socket.closedWith).toBeUndefined();
+    expect(dropped.handlers.onClose).toHaveBeenCalledExactlyOnceWith(1006, '');
+    expect(closed.handlers.onClose).not.toHaveBeenCalled();
   });
 
   it('connects with protocol v1 and only the stream settings it was given', () => {
