@@ -71,9 +71,12 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup
 
-      # No VITE_STREAM_URL: the build connects to the local mock server, which the e2e job starts.
+      # Production builds require an explicit stream URL; this artifact is for the e2e job, which
+      # starts the mock server on localhost:8787.
       - name: Vite production build
         run: pnpm build
+        env:
+          VITE_STREAM_URL: ws://localhost:8787/ws
       - name: Upload build
         uses: actions/upload-artifact@v7
         with:
@@ -101,13 +104,14 @@ jobs:
 
       - name: Run Playwright against the production build and the mock server
         run: pnpm test:e2e
+      # Also after a green run: retried (flaky) tests leave their traces in the report.
       - name: Upload Playwright report
-        if: failure()
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           path: apps/web/playwright-report/
-          retention-days: 7
+          retention-days: 3
 
   # Single required status check for branch protection; add every job to `needs`.
   ci-ok:
