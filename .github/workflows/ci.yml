@@ -113,11 +113,40 @@ jobs:
           path: apps/web/playwright-report/
           retention-days: 3
 
+  # The image that deploy.yml ships to Fly.io, started with its production defaults
+  # (NODE_ENV=production: the Origin must be allowed, a missing one is rejected).
+  server-image:
+    name: Server image (Docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+
+      - name: Build the mock server image
+        run: docker build -f apps/mock-server/Dockerfile --build-arg GIT_SHA="$GITHUB_SHA" -t lsv-mock .
+      - name: Start the container
+        run: docker run -d --name lsv-mock -p 8080:8080 -e ALLOWED_ORIGINS=http://localhost:4173 lsv-mock
+      - name: Wait for /healthz
+        run: >-
+          curl --fail --silent --show-error --retry 30 --retry-delay 1
+          --retry-connrefused --retry-all-errors http://localhost:8080/healthz
+      - name: WebSocket smoke test against the container
+        run: >-
+          node scripts/smoke-ws.ts ws://localhost:8080/ws
+          --origin http://localhost:4173
+          --expect-version "$GITHUB_SHA"
+      - name: Container logs
+        if: failure()
+        run: docker logs lsv-mock
+
   # Single required status check for branch protection; add every job to `needs`.
   ci-ok:
     name: CI OK
     if: always()
-    needs: [quality, test, build, e2e]
+    needs: [quality, test, build, e2e, server-image]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
