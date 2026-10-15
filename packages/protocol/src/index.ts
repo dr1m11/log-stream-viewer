@@ -28,9 +28,11 @@ export {
 export { isLogLevel, type JsonValue, LOG_LEVELS, type LogEvent, type LogLevel } from './event.ts';
 export {
   BATCH_INTERVAL_MS,
+  CLIENT_MESSAGE_BURST,
   DEFAULT_RATE,
   HEARTBEAT_INTERVAL_MS,
   MAX_CLIENT_MESSAGE_BYTES,
+  MAX_CLIENT_MESSAGES_PER_SECOND,
   MAX_SEED,
   MIN_RATE,
   PROTOCOL_VERSION,
