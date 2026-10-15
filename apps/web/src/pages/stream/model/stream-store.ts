@@ -1,11 +1,19 @@
-import type { LogEvent, StreamSettings } from '@lsv/protocol';
+import type { LogEvent, StreamLimits, StreamSettings } from '@lsv/protocol';
 
 import type { StreamSocket, StreamSocketHandlers } from '@/shared/api';
 
 /** Where the connection is. `connected` starts with the server's `hello`, not with the socket opening. */
 export type ConnectionStatus =
   | { readonly phase: 'connecting' }
-  | { readonly phase: 'connected'; readonly stream: StreamSettings }
+  | {
+      readonly phase: 'connected';
+      /** Effective stream settings, after the server's defaults and clamping. */
+      readonly stream: StreamSettings;
+      /** Bounds of this deployment; a rate control must clamp to them (`docs/protocol.md`). */
+      readonly limits: StreamLimits;
+      /** When the server will end the session with 4000, epoch ms (server clock). */
+      readonly expiresAt: number;
+    }
   | {
       readonly phase: 'closed';
       readonly code: number;
@@ -14,15 +22,20 @@ export type ConnectionStatus =
       readonly wasConnected: boolean;
     };
 
-/** What the page shows; a new object at most once per animation frame. */
+/** What the page shows. A new object only when a value changed, at most once per animation frame. */
 export interface StreamSnapshot {
   readonly status: ConnectionStatus;
   /** Events received since the connection opened. */
   readonly received: number;
   /** Events received during the last second (0 unless connected). */
   readonly eventsPerSecond: number;
-  /** Events the server numbered but this client never received: gaps in `seq`. */
+  /** Events the server numbered but this client never received: gaps in `seq`, the authoritative loss. */
   readonly missed: number;
+  /**
+   * Events the server says it skipped under backpressure (`batch.dropped`). Informational: they
+   * are part of `missed` too, so the difference is loss the server did not report.
+   */
+  readonly dropped: number;
   /** Frames dropped because they were not valid protocol messages. */
   readonly invalidFrames: number;
   /** The newest event, refreshed at most every {@link PREVIEW_INTERVAL_MS}. */
@@ -32,7 +45,7 @@ export interface StreamSnapshot {
 export interface StreamStore {
   /** Subscribes to snapshot changes (`useSyncExternalStore`). Returns the unsubscribe function. */
   readonly subscribe: (listener: () => void) => () => void;
-  /** The current snapshot: the same object until the next publication. */
+  /** The current snapshot: the same object until a value changes. */
   readonly getSnapshot: () => StreamSnapshot;
   /** Opens a connection with fresh counters, closing the current one first. */
   readonly start: () => void;
@@ -52,6 +65,7 @@ const INITIAL_SNAPSHOT: StreamSnapshot = {
   received: 0,
   eventsPerSecond: 0,
   missed: 0,
+  dropped: 0,
   invalidFrames: 0,
   latest: undefined,
 };
@@ -78,8 +92,10 @@ export function createStreamStore(
   let status: ConnectionStatus = CONNECTING;
   let received = 0;
   let missed = 0;
+  let dropped = 0;
   let invalidFrames = 0;
   let lastSeq = 0;
+  let connectedAt = 0;
   let latest: LogEvent | undefined;
   let previewShownAt = Number.NEGATIVE_INFINITY;
   let snapshot = INITIAL_SNAPSHOT;
@@ -88,8 +104,10 @@ export function createStreamStore(
     status = CONNECTING;
     received = 0;
     missed = 0;
+    dropped = 0;
     invalidFrames = 0;
     lastSeq = 0;
+    connectedAt = 0;
     latest = undefined;
     previewShownAt = Number.NEGATIVE_INFINITY;
     bucketIds.fill(Number.NEGATIVE_INFINITY);
@@ -111,8 +129,10 @@ export function createStreamStore(
       const age = current - (bucketIds[slot] ?? Number.NEGATIVE_INFINITY);
       if (age < RATE_BUCKETS) sum += bucketCounts[slot] ?? 0;
     }
-    // The window is nine full buckets plus the elapsed part of the current one.
-    const windowMs = (RATE_BUCKETS - 1) * RATE_BUCKET_MS + (now % RATE_BUCKET_MS);
+    // The window is nine full buckets plus the elapsed part of the current one, but no longer than
+    // the stream has run (or the first second would read low), and at least one bucket.
+    const window = (RATE_BUCKETS - 1) * RATE_BUCKET_MS + (now % RATE_BUCKET_MS);
+    const windowMs = Math.max(RATE_BUCKET_MS, Math.min(window, now - connectedAt));
     return Math.round((sum * 1000) / windowMs);
   }
 
@@ -141,11 +161,25 @@ export function createStreamStore(
         }, wait);
       }
     }
+    const rate = status.phase === 'connected' ? eventsPerSecond(now) : 0;
+    const previous = snapshot;
+    if (
+      previous.status === status &&
+      previous.received === received &&
+      previous.eventsPerSecond === rate &&
+      previous.missed === missed &&
+      previous.dropped === dropped &&
+      previous.invalidFrames === invalidFrames &&
+      previous.latest === preview
+    ) {
+      return;
+    }
     snapshot = {
       status,
       received,
-      eventsPerSecond: status.phase === 'connected' ? eventsPerSecond(now) : 0,
+      eventsPerSecond: rate,
       missed,
+      dropped,
       invalidFrames,
       latest: preview,
     };
@@ -164,22 +198,26 @@ export function createStreamStore(
   }
 
   const handlers: StreamSocketHandlers = {
-    onHello(message) {
-      status = { phase: 'connected', stream: message.stream };
+    onHello({ stream, limits, expiresAt }) {
+      status = { phase: 'connected', stream, limits, expiresAt };
       lastSeq = 0;
+      connectedAt = performance.now();
       schedulePublish();
     },
-    onBatch({ events }) {
+    onBatch(message) {
+      const { events } = message;
       const count = events.length;
+      dropped += message.dropped ?? 0;
       const last = events[count - 1];
-      if (last === undefined) return;
-      received += count;
-      // `seq` grows by one per generated event and strictly increases within a batch, so every
-      // number after the previous batch's last `seq` up to this one's that did not arrive is lost.
-      missed += Math.max(0, last.seq - lastSeq - count);
-      lastSeq = last.seq;
-      latest = last;
-      countForRate(performance.now(), count);
+      if (last !== undefined) {
+        received += count;
+        // `seq` grows by one per generated event and strictly increases within a batch, so every
+        // number after the previous batch's last `seq` up to this one's that did not arrive is lost.
+        missed += Math.max(0, last.seq - lastSeq - count);
+        lastSeq = last.seq;
+        latest = last;
+        countForRate(performance.now(), count);
+      }
       schedulePublish();
     },
     // Keeps events per second current while no batches arrive.

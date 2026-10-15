@@ -1,17 +1,30 @@
 import { useId } from 'react';
 
-import type { StreamSnapshot, StreamStore } from '../model/stream-store';
+import type { ConnectionStatus, StreamSnapshot, StreamStore } from '../model/stream-store';
 import { useStreamSelector } from '../model/use-stream-store';
 
 const NUMBER_FORMAT = new Intl.NumberFormat('en-US');
 
-function selectSnapshot(snapshot: StreamSnapshot): StreamSnapshot {
-  return snapshot;
-}
+// Each counter selects a number, so a counter that did not change does not re-render.
+const selectReceived = (snapshot: StreamSnapshot): number => snapshot.received;
+const selectEventsPerSecond = (snapshot: StreamSnapshot): number => snapshot.eventsPerSecond;
+const selectMissed = (snapshot: StreamSnapshot): number => snapshot.missed;
+const selectDropped = (snapshot: StreamSnapshot): number => snapshot.dropped;
+const selectInvalidFrames = (snapshot: StreamSnapshot): number => snapshot.invalidFrames;
+const selectStatus = (snapshot: StreamSnapshot): ConnectionStatus => snapshot.status;
 
 /** One counter: a group named by its label ("Events received, group, 1,234"). */
-function Stat({ label, value }: { label: string; value: number }) {
+function Stat({
+  store,
+  label,
+  select,
+}: {
+  store: StreamStore;
+  label: string;
+  select: (snapshot: StreamSnapshot) => number;
+}) {
   const labelId = useId();
+  const value = useStreamSelector(store, select);
   return (
     <div role="group" aria-labelledby={labelId}>
       <div id={labelId} className="text-xs text-fg-muted">
@@ -22,17 +35,27 @@ function Stat({ label, value }: { label: string; value: number }) {
   );
 }
 
+/** The effective stream settings, once the server has sent them. */
+function StreamSettingsNote({ store }: { store: StreamStore }) {
+  const status = useStreamSelector(store, selectStatus);
+  if (status.phase !== 'connected') return null;
+  const { scenario, rate, seed } = status.stream;
+  return (
+    <p className="mt-3 text-sm text-fg-muted">
+      Scenario {scenario} at {NUMBER_FORMAT.format(rate)} events/s, seed {seed}. Missed events are
+      gaps in the event sequence numbers; they include the events the server reports as dropped
+      under backpressure.
+    </p>
+  );
+}
+
 /**
- * Stream counters. Re-renders with every published snapshot — at most once per animation frame.
- * Deliberately not a live region: announcing numbers that change many times a second would drown
- * out everything else for screen-reader users.
+ * Stream counters; each re-renders only when its own number changes, at most once per animation
+ * frame. Deliberately not a live region: announcing numbers that change many times a second
+ * would drown out everything else for screen-reader users.
  */
 export function StreamStats({ store }: { store: StreamStore }) {
   const headingId = useId();
-  const { status, received, eventsPerSecond, missed, invalidFrames } = useStreamSelector(
-    store,
-    selectSnapshot,
-  );
 
   return (
     <section
@@ -42,18 +65,14 @@ export function StreamStats({ store }: { store: StreamStore }) {
       <h2 id={headingId} className="text-sm font-semibold">
         Stream
       </h2>
-      <div className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <Stat label="Events received" value={received} />
-        <Stat label="Events per second" value={eventsPerSecond} />
-        <Stat label="Missed events" value={missed} />
-        <Stat label="Invalid frames" value={invalidFrames} />
+      <div className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+        <Stat store={store} label="Events received" select={selectReceived} />
+        <Stat store={store} label="Events per second" select={selectEventsPerSecond} />
+        <Stat store={store} label="Missed events" select={selectMissed} />
+        <Stat store={store} label="Dropped by server" select={selectDropped} />
+        <Stat store={store} label="Invalid frames" select={selectInvalidFrames} />
       </div>
-      {status.phase === 'connected' && (
-        <p className="mt-3 text-sm text-fg-muted">
-          Scenario {status.stream.scenario} at {NUMBER_FORMAT.format(status.stream.rate)} events/s,
-          seed {status.stream.seed}. Missed events are gaps in the event sequence numbers.
-        </p>
-      )}
+      <StreamSettingsNote store={store} />
     </section>
   );
 }

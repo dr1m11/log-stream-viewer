@@ -50,15 +50,18 @@ describe('createStreamStore', () => {
     vi.useRealTimers();
   });
 
-  it('goes from connecting to connected with the stream settings, then to closed with the code', () => {
+  it('goes from connecting to connected with the stream and its limits, then to closed with the code', () => {
     const { store, server } = setup();
     expect(store.getSnapshot().status).toEqual({ phase: 'connecting' });
 
-    server().onHello?.(testHello({ rate: 500, scenario: 'error-burst', seed: 7 }));
+    const hello = testHello({ rate: 500, scenario: 'error-burst', seed: 7 });
+    server().onHello?.(hello);
     nextFrame();
     expect(store.getSnapshot().status).toEqual({
       phase: 'connected',
       stream: { rate: 500, scenario: 'error-burst', seed: 7 },
+      limits: hello.limits,
+      expiresAt: hello.expiresAt,
     });
 
     server().onClose?.(4000, 'session expired');
@@ -107,6 +110,19 @@ describe('createStreamStore', () => {
     expect(store.getSnapshot()).toMatchObject({ received: 8, missed: 4 });
   });
 
+  it('keeps the drops the server reports apart from the gaps in seq', () => {
+    const { store, server } = setup();
+    server().onHello?.(testHello());
+
+    server().onBatch?.(testBatch([1, 2]));
+    // Backpressure: the server skipped 3..10 and says so; 11 is lost without a report.
+    server().onBatch?.({ ...testBatch([12]), dropped: 8 });
+    server().onBatch?.({ ...testBatch([]), dropped: 2 });
+    nextFrame();
+
+    expect(store.getSnapshot()).toMatchObject({ received: 3, missed: 9, dropped: 10 });
+  });
+
   it('counts the events missing before the first batch of a stream', () => {
     const { store, server } = setup();
     server().onHello?.(testHello());
@@ -147,6 +163,37 @@ describe('createStreamStore', () => {
     server().onHeartbeat?.(testHeartbeat());
     nextFrame();
     expect(store.getSnapshot().eventsPerSecond).toBe(0);
+  });
+
+  it('measures events per second over the time since hello while the stream is young', () => {
+    const { store, server } = setup();
+    server().onHello?.(testHello());
+
+    // 200 events per second for 300 ms: over a full one-second window this would read ~66.
+    for (let tick = 0; tick < 6; tick++) {
+      server().onBatch?.(testBatch(seqs(tick * 10 + 1, 10)));
+      vi.advanceTimersByTime(50);
+    }
+    server().onHeartbeat?.(testHeartbeat());
+    nextFrame();
+
+    const { eventsPerSecond } = store.getSnapshot();
+    expect(eventsPerSecond).toBeGreaterThanOrEqual(180);
+    expect(eventsPerSecond).toBeLessThanOrEqual(220);
+  });
+
+  it('keeps the same snapshot and notifies nobody when nothing changed', () => {
+    const { store, listener, server } = setup();
+    server().onHello?.(testHello());
+    nextFrame();
+    expect(listener).toHaveBeenCalledOnce();
+    const snapshot = store.getSnapshot();
+
+    server().onHeartbeat?.(testHeartbeat());
+    nextFrame();
+
+    expect(store.getSnapshot()).toBe(snapshot);
+    expect(listener).toHaveBeenCalledOnce();
   });
 
   it('reports no events per second once the connection has closed', () => {

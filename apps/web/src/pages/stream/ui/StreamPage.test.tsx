@@ -1,14 +1,21 @@
 import helloFrame from '@lsv/protocol/fixtures/v1/hello.json?raw';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FakeWebSocket, testBatch } from '@/shared/lib/testing';
 
 import { StreamPage } from './StreamPage';
 
-function batchFrame(seqs: readonly number[]): string {
-  return JSON.stringify(testBatch(seqs));
+function batchFrame(seqs: readonly number[], dropped?: number): string {
+  return JSON.stringify({ ...testBatch(seqs), dropped });
+}
+
+function socketAt(index: number): FakeWebSocket {
+  const socket = FakeWebSocket.instances[index];
+  if (socket === undefined) throw new Error(`No WebSocket #${String(index)} was created`);
+  return socket;
 }
 
 /** Renders the page and opens its (fake) socket with the server's `hello`. */
@@ -78,18 +85,71 @@ describe('StreamPage', () => {
     expect(status).toHaveTextContent('Reload the page to retry after 30 s.');
   });
 
-  it('counts received and missed events and previews the newest event', async () => {
+  it('shows a socket the browser refuses to open in the status, not as a crash', async () => {
+    vi.stubGlobal(
+      'WebSocket',
+      vi.fn(function refuse() {
+        throw new DOMException(
+          'An insecure WebSocket connection may not be initiated from a page loaded over HTTPS.',
+          'SecurityError',
+        );
+      }),
+    );
+
+    render(<StreamPage />);
+
+    const status = screen.getByRole('status');
+    expect(await within(status).findByText('Closed: Cannot open the connection')).toBeVisible();
+    expect(status).toHaveTextContent('An insecure WebSocket connection may not be initiated');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('keeps one live socket through the StrictMode double mount', async () => {
+    const { unmount } = render(
+      <StrictMode>
+        <StreamPage />
+      </StrictMode>,
+    );
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    const [first, second] = [socketAt(0), socketAt(1)];
+
+    // The first effect's cleanup closed its socket while connecting: it closes once open, and
+    // whatever it still delivers does not reach the page.
+    act(() => {
+      first.open();
+      first.receive(helloFrame);
+      first.receive(batchFrame([1, 2, 3, 4, 5, 6, 7, 8, 9]));
+    });
+    expect(first.closedWith?.code).toBe(1000);
+
+    act(() => {
+      second.open();
+      second.receive(helloFrame);
+      second.receive(batchFrame([1, 2]));
+    });
+    await waitFor(() => {
+      expect(counter('Events received')).toBe('2');
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('Connected');
+    expect(second.closedWith).toBeUndefined();
+
+    unmount();
+    expect(second.closedWith?.code).toBe(1000);
+  });
+
+  it('counts received, missed and server-dropped events and previews the newest event', async () => {
     const { socket } = await renderConnected();
 
     act(() => {
       socket.receive(batchFrame([1, 2, 3]));
-      socket.receive(batchFrame([6, 7]));
+      socket.receive(batchFrame([6, 7], 1));
     });
 
     await waitFor(() => {
       expect(counter('Events received')).toBe('5');
     });
     expect(counter('Missed events')).toBe('2');
+    expect(counter('Dropped by server')).toBe('1');
     expect(counter('Invalid frames')).toBe('0');
     expect(Number(counter('Events per second'))).toBeGreaterThan(0);
     const latest = screen.getByRole('region', { name: 'Latest event' });
