@@ -63,6 +63,8 @@ const SEARCH_TERMS = [
   'yoga mat',
   'mechanical keyboard',
 ] as const;
+/** Query-string form of {@link SEARCH_TERMS}, encoded once instead of per event. */
+const ENCODED_SEARCH_TERMS = SEARCH_TERMS.map((term) => encodeURIComponent(term));
 const PAYMENT_PROVIDERS = ['acme-pay', 'stripe-like', 'paybridge'] as const;
 const PAYMENT_METHODS = ['card', 'card', 'paypal', 'apple-pay'] as const;
 const UPSTREAMS = ['orders', 'payments', 'search', 'auth'] as const;
@@ -92,7 +94,7 @@ const ROUTES: readonly Route[] = [
   { method: 'GET', path: (rng) => `/api/orders/${String(orderId(rng))}` },
   { method: 'POST', path: () => '/api/orders' },
   { method: 'GET', path: (rng) => `/api/products/${sku(rng)}` },
-  { method: 'GET', path: (rng) => `/api/search?q=${encodeURIComponent(rng.pick(SEARCH_TERMS))}` },
+  { method: 'GET', path: (rng) => `/api/search?q=${rng.pick(ENCODED_SEARCH_TERMS)}` },
   { method: 'POST', path: () => '/api/auth/token' },
   { method: 'GET', path: () => '/api/users/me' },
   { method: 'PUT', path: (rng) => `/api/cart/items/${sku(rng)}` },
