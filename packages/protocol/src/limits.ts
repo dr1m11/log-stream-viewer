@@ -22,5 +22,14 @@ export const HEARTBEAT_INTERVAL_MS = 1000;
 /** Largest client frame the server accepts; a bigger one closes the socket with 1009. */
 export const MAX_CLIENT_MESSAGE_BYTES = 4096;
 
+/**
+ * Sustained rate of client frames, WebSocket pings included, the server accepts per connection (a
+ * token bucket of {@link CLIENT_MESSAGE_BURST}); a client that sends faster is closed with 1008.
+ */
+export const MAX_CLIENT_MESSAGES_PER_SECOND = 20;
+
+/** Client frames the server accepts in a burst before {@link MAX_CLIENT_MESSAGES_PER_SECOND} applies. */
+export const CLIENT_MESSAGE_BURST = 40;
+
 /** Seeds are unsigned 32-bit integers, so a PRNG such as mulberry32 can use them as is. */
 export const MAX_SEED = 0xffff_ffff;

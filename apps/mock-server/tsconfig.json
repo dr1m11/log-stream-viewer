@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Node 24 runs these sources directly (type stripping): explicit `.ts` in relative imports.
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "exactOptionalPropertyTypes": true
+  },
+  "include": ["src", "bench"]
+}

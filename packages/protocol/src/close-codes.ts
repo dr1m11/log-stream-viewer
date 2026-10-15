@@ -8,6 +8,8 @@ export const CLOSE_CODES = {
   normal: 1000,
   /** The server is shutting down or redeploying. Reconnect with backoff. */
   goingAway: 1001,
+  /** The client sent messages faster than the server accepts them. Reconnect with backoff. */
+  policyViolation: 1008,
   /** A client frame exceeded `MAX_CLIENT_MESSAGE_BYTES`. */
   messageTooBig: 1009,
   /** The session reached `hello.limits.sessionMaxMs`. Terminal: do not reconnect automatically. */

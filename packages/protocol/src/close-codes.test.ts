@@ -24,6 +24,7 @@ describe('close codes', () => {
   it.each([
     CLOSE_CODES.normal,
     CLOSE_CODES.goingAway,
+    CLOSE_CODES.policyViolation,
     CLOSE_CODES.messageTooBig,
     CLOSE_CODES.busy,
     1006,

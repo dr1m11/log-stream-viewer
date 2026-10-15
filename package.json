@@ -12,6 +12,7 @@
   },
   "scripts": {
     "dev": "pnpm --recursive --parallel --if-present dev",
+    "dev:server": "pnpm --filter @lsv/mock-server dev",
     "build": "pnpm --recursive --if-present build",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

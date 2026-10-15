@@ -16,6 +16,14 @@ export default defineConfig({
           environment: 'node',
         },
       },
+      {
+        test: {
+          name: 'mock-server',
+          root: './apps/mock-server',
+          include: ['src/**/*.test.ts'],
+          environment: 'node',
+        },
+      },
     ],
     coverage: {
       provider: 'v8',
@@ -27,10 +35,12 @@ export default defineConfig({
       exclude: ['**/*.{test,bench}.{ts,tsx}', '**/index.ts', '**/src/main.{ts,tsx}'],
       reporter: ['text', 'html', 'json-summary', 'json'],
       reportOnFailure: true,
-      // Per-package gates (see docs/adr/0001); mock-server (80%) is added with the package.
+      // Per-package gates (see docs/adr/0001). The server's entry point (`src/main.ts`, excluded
+      // above) only wires env, signals and process exit; its parts are covered through server.ts.
       // Threshold globs always match paths relative to the repository root.
       thresholds: {
         'packages/protocol/src/**': { lines: 90, functions: 90, branches: 90, statements: 90 },
+        'apps/mock-server/src/**': { lines: 80, functions: 80, branches: 80, statements: 80 },
       },
     },
   },

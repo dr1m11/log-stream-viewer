@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   BATCH_INTERVAL_MS,
+  CLIENT_MESSAGE_BURST,
   DEFAULT_RATE,
   HEARTBEAT_INTERVAL_MS,
+  MAX_CLIENT_MESSAGES_PER_SECOND,
   MAX_SEED,
   MIN_RATE,
   PROTOCOL_VERSION,
@@ -20,6 +22,10 @@ describe('protocol limits', () => {
 
   it('sends heartbeats on a batch tick boundary', () => {
     expect(HEARTBEAT_INTERVAL_MS % BATCH_INTERVAL_MS).toBe(0);
+  });
+
+  it('lets a client burst above its sustained message rate', () => {
+    expect(CLIENT_MESSAGE_BURST).toBeGreaterThanOrEqual(MAX_CLIENT_MESSAGES_PER_SECOND);
   });
 
   it('uses unsigned 32-bit seeds', () => {
