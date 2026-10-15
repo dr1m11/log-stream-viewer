@@ -28,6 +28,12 @@ export interface ServerConfig {
   /** Deployed commit, reported by `/healthz`. */
   readonly gitSha: string;
   readonly production: boolean;
+  /**
+   * Whether the per-IP cap trusts the proxy's `Fly-Client-IP` header (`TRUST_PROXY_IP_HEADER`,
+   * default: on in production, behind Fly's proxy which sets it; off locally). Without a trusted
+   * proxy any client could set the header and dodge the cap, so the socket address counts.
+   */
+  readonly trustProxyIpHeader: boolean;
 }
 
 /** Environment variables as `process.env` provides them. */
@@ -81,6 +87,15 @@ class EnvReader {
     );
     return fallback;
   }
+
+  boolean(name: string, fallback: boolean): boolean {
+    const text = this.string(name)?.toLowerCase();
+    if (text === undefined) return fallback;
+    if (text === 'true' || text === '1') return true;
+    if (text === 'false' || text === '0') return false;
+    this.errors.push(`${name} must be true, false, 1 or 0, got ${JSON.stringify(text)}`);
+    return fallback;
+  }
 }
 
 /**
@@ -99,17 +114,9 @@ export function parseAllowedOrigins(
     const value = entry.trim();
     if (value === '') continue;
     if (value.startsWith('^')) {
-      if (!value.endsWith('$')) {
-        errors.push(
-          `ALLOWED_ORIGINS: regex ${JSON.stringify(value)} must end with $ (entries starting with ^ are anchored regexes and cannot contain commas)`,
-        );
-        continue;
-      }
-      try {
-        patterns.push(new RegExp(value));
-      } catch (error) {
-        errors.push(`ALLOWED_ORIGINS: invalid regex ${JSON.stringify(value)}: ${String(error)}`);
-      }
+      const pattern = compileAnchored(value);
+      if (typeof pattern === 'string') errors.push(pattern);
+      else patterns.push(pattern);
       continue;
     }
     if (!isOrigin(value)) {
@@ -124,6 +131,28 @@ export function parseAllowedOrigins(
     errors.push('ALLOWED_ORIGINS must list at least one origin');
   }
   return errors.length === 0 ? ok({ exact, patterns }) : err(errors);
+}
+
+/**
+ * Compiles an `ALLOWED_ORIGINS` regex entry `^body$` as `^(?:body)$`, so an alternation inside
+ * (`^a|b$`) cannot escape the anchors. The body must be a complete pattern on its own (no
+ * unbalanced groups that could close the wrapper) and the final `$` must not be escaped.
+ * Returns the problem as a string when the entry is not usable.
+ */
+function compileAnchored(entry: string): RegExp | string {
+  const quoted = JSON.stringify(entry);
+  const trailingBackslashes = /\\*\$$/.exec(entry)?.[0].length ?? 0;
+  if (!entry.endsWith('$') || trailingBackslashes % 2 === 0) {
+    return `ALLOWED_ORIGINS: regex ${quoted} must end with an unescaped $ (entries starting with ^ are anchored regexes and cannot contain commas)`;
+  }
+  const body = entry.slice(1, -1);
+  try {
+    // Validates the body alone first: `a)|(.*` compiles inside the wrapper but not on its own.
+    new RegExp(body, 'u');
+    return new RegExp(`^(?:${body})$`, 'u');
+  } catch (error) {
+    return `ALLOWED_ORIGINS: invalid regex ${quoted}: ${String(error)}`;
+  }
 }
 
 /** Whether `value` is exactly a serialized `http(s)` origin. */
@@ -182,6 +211,7 @@ export function parseConfig(env: Env): Result<ServerConfig, string[]> {
     24 * 60 * 60 * 1000,
   );
   const gitSha = read.string('GIT_SHA') ?? CONFIG_DEFAULTS.gitSha;
+  const trustProxyIpHeader = read.boolean('TRUST_PROXY_IP_HEADER', production);
 
   const errors = read.errors;
   let allowed: Pick<OriginPolicy, 'exact' | 'patterns'> = {
@@ -210,5 +240,6 @@ export function parseConfig(env: Env): Result<ServerConfig, string[]> {
     sessionMaxMs,
     gitSha,
     production,
+    trustProxyIpHeader,
   });
 }

@@ -74,7 +74,7 @@ describe('parseConfig', () => {
     });
     expect([...config.origins.exact]).toEqual(['https://a.example.dev']);
     expect(config.origins.patterns.map(String)).toEqual([
-      '/^https:\\/\\/pr-\\d+-a\\.example\\.dev$/',
+      '/^(?:https:\\/\\/pr-\\d+-a\\.example\\.dev)$/u',
     ]);
   });
 
@@ -125,6 +125,19 @@ describe('parseConfig', () => {
     expect(config.host).toBe(CONFIG_DEFAULTS.productionHost);
     expect(config.origins.allowMissing).toBe(false);
   });
+
+  it('trusts the proxy IP header in production or when asked to', () => {
+    expect(configOf({}).trustProxyIpHeader).toBe(false);
+    expect(configOf(PRODUCTION).trustProxyIpHeader).toBe(true);
+    expect(configOf({ TRUST_PROXY_IP_HEADER: 'true' }).trustProxyIpHeader).toBe(true);
+    expect(configOf({ TRUST_PROXY_IP_HEADER: '1' }).trustProxyIpHeader).toBe(true);
+    expect(configOf({ ...PRODUCTION, TRUST_PROXY_IP_HEADER: 'false' }).trustProxyIpHeader).toBe(
+      false,
+    );
+    expect(errorsOf({ TRUST_PROXY_IP_HEADER: 'yes' })).toEqual([
+      'TRUST_PROXY_IP_HEADER must be true, false, 1 or 0, got "yes"',
+    ]);
+  });
 });
 
 describe('parseAllowedOrigins', () => {
@@ -143,8 +156,11 @@ describe('parseAllowedOrigins', () => {
     ['https://a.example.dev/app', 'not an origin'],
     ['ftp://files.example.dev', 'not an origin'],
     ['*', 'not an origin'],
-    ['^https://a\\.example\\.dev', 'must end with $'],
+    ['^https://a\\.example\\.dev', 'must end with an unescaped $'],
+    ['^https://a\\.example\\.dev\\$', 'must end with an unescaped $'],
     ['^https://(a\\.example\\.dev$', 'invalid regex'],
+    // Balanced overall, but the body alone is not: it would close the anchoring group.
+    ['^https://a\\.dev)|(.*$', 'invalid regex'],
     [' , ', 'at least one origin'],
   ])('rejects %j (%s)', (text, problem) => {
     const result = parseAllowedOrigins(text);
@@ -154,6 +170,20 @@ describe('parseAllowedOrigins', () => {
   it('turns a comma inside a regex into an error instead of a wider allowlist', () => {
     const result = parseAllowedOrigins('^https://a{1,3}\\.example\\.dev$');
     expect(result.ok).toBe(false);
+  });
+
+  it('keeps an alternation inside the anchors', () => {
+    const result = parseAllowedOrigins('^https://a\\.dev|https://b\\.dev$');
+    if (!result.ok) throw new Error(result.error.join('; '));
+    const policy: OriginPolicy = { ...result.value, allowMissing: false };
+    expect(isOriginAllowed(policy, 'https://a.dev')).toBe(true);
+    expect(isOriginAllowed(policy, 'https://b.dev')).toBe(true);
+    expect(isOriginAllowed(policy, 'https://a.dev.evil.test')).toBe(false);
+    expect(isOriginAllowed(policy, 'https://evil.test/https://b.dev')).toBe(false);
+  });
+
+  it('accepts an escaped backslash before the final $', () => {
+    expect(parseAllowedOrigins('^https://a\\.dev\\\\$').ok).toBe(true);
   });
 });
 
