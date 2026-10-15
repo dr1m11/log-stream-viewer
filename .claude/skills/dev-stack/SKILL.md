@@ -16,7 +16,7 @@ Arguments: `$ARGUMENTS` — optional rate and scenario. Requires `apps/web` and 
    - `curl -s -o /dev/null -w "%{http_code}" --retry 30 --retry-delay 1 --retry-connrefused http://localhost:5173/` → `200`.
      If either fails, read the background task output and report the error instead of retrying blindly.
 4. With the chrome-devtools MCP server: open `http://localhost:5173/?rate=<rate>&scenario=<scenario>` in a new page, wait for the text "Connected", take a snapshot.
-5. Check the stream: take a second snapshot ~2 s later and confirm the received-events counter grew; list console messages (expect none at error level) and network requests (one WebSocket to `ws://localhost:8787/ws`).
+5. Check the stream: take a second snapshot ~2 s later and confirm the received-events counter grew; list console messages (expect none at error level). The MCP request list does not show WebSockets: the mock server's log has a `connect stream=…` line per socket — in dev, React StrictMode opens a first one and closes it with 1000 right after the handshake, then the second one streams.
 6. If the task is about performance, record a trace (`performance_start_trace` / `performance_stop_trace`) while the stream runs and summarize the insights (long tasks, INP, layout shifts) with numbers.
 7. Report: status, counters, console/network findings, screenshots for UI changes.
 8. Clean up unless the user wants the stack to keep running: close the page, stop the background task, run `pnpm ports:free` again (on Windows child processes can survive their parent).

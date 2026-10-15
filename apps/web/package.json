@@ -1,0 +1,46 @@
+{
+  "name": "@lsv/web",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Log Stream Viewer single-page app",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:local": "vite build --mode localhost",
+    "preview": "vite preview",
+    "typecheck": "tsc -b",
+    "lint:fsd": "steiger ./src",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@lsv/protocol": "workspace:*",
+    "clsx": "2.1.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-error-boundary": "6.1.6",
+    "tailwind-merge": "3.7.0"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@feature-sliced/steiger-plugin": "0.8.0",
+    "@playwright/test": "1.64.1",
+    "@steiger/toolkit": "0.2.3",
+    "@tailwindcss/vite": "4.3.3",
+    "@testing-library/dom": "10.4.2",
+    "@testing-library/jest-dom": "7.0.1",
+    "@testing-library/react": "16.3.3",
+    "@testing-library/user-event": "14.6.7",
+    "@types/node": "catalog:",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "jsdom": "30.1.2",
+    "steiger": "0.7.0",
+    "tailwindcss": "4.3.3",
+    "typescript": "catalog:",
+    "vite": "8.3.4",
+    "vitest": "5.0.4"
+  }
+}

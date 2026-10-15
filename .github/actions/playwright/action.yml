@@ -1,0 +1,27 @@
+name: Set up Playwright Chromium
+description: Restore or install the Chromium build that matches the workspace Playwright version.
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve Playwright version
+      id: version
+      shell: bash
+      run: echo "version=$(pnpm --filter @lsv/web exec playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+    - name: Cache Playwright browsers
+      id: cache
+      uses: actions/cache@v6
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-${{ runner.os }}-${{ steps.version.outputs.version }}
+
+    - name: Install Chromium
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: pnpm --filter @lsv/web exec playwright install --with-deps chromium
+
+    - name: Install Chromium system dependencies
+      if: steps.cache.outputs.cache-hit == 'true'
+      shell: bash
+      run: pnpm --filter @lsv/web exec playwright install-deps chromium

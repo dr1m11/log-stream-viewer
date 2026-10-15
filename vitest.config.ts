@@ -24,6 +24,8 @@ export default defineConfig({
           environment: 'node',
         },
       },
+      // jsdom + Testing Library; reuses the app's Vite config (alias, React, Tailwind).
+      'apps/web/vitest.config.ts',
     ],
     coverage: {
       provider: 'v8',

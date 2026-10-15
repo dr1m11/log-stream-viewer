@@ -1,0 +1,5 @@
+{
+  // Solution file: the app (browser) and its tooling configs (Node) are type-checked as two programs.
+  "files": [],
+  "references": [{ "path": "./tsconfig.app.json" }, { "path": "./tsconfig.node.json" }]
+}
