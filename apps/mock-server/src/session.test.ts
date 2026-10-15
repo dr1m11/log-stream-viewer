@@ -15,15 +15,19 @@ import { describe, expect, it } from 'vitest';
 import { TRAFFIC_SPIKE } from './generator/scenarios.ts';
 import {
   clampRate,
+  COMPRESSED_EVENT_BYTES_ESTIMATE,
   EVENT_BYTES_ESTIMATE,
   hardBufferLimit,
   MAX_BUFFERED_BYTES,
+  MAX_IN_FLIGHT_MESSAGES,
   MAX_SOFT_BUFFER_BYTES,
   MIN_SOFT_BUFFER_BYTES,
   PING_INTERVAL_MS,
   Session,
   type SessionSocket,
+  SOFT_IN_FLIGHT_MESSAGES,
   softBufferLimit,
+  STALL_TIMEOUT_MS,
 } from './session.ts';
 
 const fixture = (name: string): string =>
@@ -45,11 +49,25 @@ class FakeSocket implements SessionSocket {
   /** Extra bytes every send adds to the buffer. */
   extraOnSend = 0;
 
-  send(data: string): void {
+  /** Simulates writes that never complete (the client reads nothing): callbacks are kept. */
+  holdWrites = false;
+  readonly pendingWrites: (() => void)[] = [];
+
+  send(data: string, sent: (error?: Error) => void): void {
     const parsed = parseServerMessage(data);
     if (!parsed.ok) throw new Error(`Invalid server message: ${parsed.error.message}`);
     this.messages.push(parsed.value);
     this.bufferedAmount += (this.growOnSend ? data.length : 0) + this.extraOnSend;
+    if (this.holdWrites)
+      this.pendingWrites.push(() => {
+        sent();
+      });
+    else sent();
+  }
+
+  /** Completes the oldest held write. */
+  completeWrite(): void {
+    this.pendingWrites.shift()?.();
   }
 
   ping(): void {
@@ -176,10 +194,13 @@ describe('Session', () => {
     expect(socket.ofType('batch').some((batch) => batch.dropped !== undefined)).toBe(false);
   });
 
-  it('derives the soft threshold from about one second of the stream', () => {
+  it('derives the soft threshold from about one second of the stream on the wire', () => {
     expect(softBufferLimit(10)).toBe(MIN_SOFT_BUFFER_BYTES);
     expect(softBufferLimit(1000)).toBe(1000 * EVENT_BYTES_ESTIMATE);
     expect(softBufferLimit(20_000)).toBe(MAX_SOFT_BUFFER_BYTES);
+    expect(softBufferLimit(2000, COMPRESSED_EVENT_BYTES_ESTIMATE)).toBe(
+      2000 * COMPRESSED_EVENT_BYTES_ESTIMATE,
+    );
     expect(hardBufferLimit(20_000)).toBe(MAX_BUFFERED_BYTES);
     expect(hardBufferLimit(100_000)).toBeGreaterThan(
       MAX_SOFT_BUFFER_BYTES + 2 * 5000 * EVENT_BYTES_ESTIMATE - 1,
@@ -212,26 +233,95 @@ describe('Session', () => {
     expect(socket.ofType('batch').at(-1)?.dropped).toBeUndefined();
   });
 
-  it('drops only what the budget would have granted', () => {
+  it('asks the global budget for nothing while backpressured and drops its due events', () => {
     const { socket, session } = open();
     socket.bufferedAmount = softBufferLimit(200) + 1;
-    run(session, T0, T0 + 1000, (due) => Math.min(due, 3));
-    expect(session.droppedEvents).toBe(60);
+    const demands: number[] = [];
+    run(session, T0, T0 + 1000, (due) => {
+      demands.push(due);
+      return due;
+    });
+    expect(demands.every((demand) => demand === 0)).toBe(true);
+    expect(session.droppedEvents).toBe(200);
     socket.bufferedAmount = 0;
-    run(session, T0 + 1000, T0 + 1050, (due) => Math.min(due, 3));
-    expect(socket.ofType('batch').at(-1)?.dropped).toBe(60);
+    run(session, T0 + 1000, T0 + 1050);
+    expect(socket.ofType('batch').at(-1)?.dropped).toBe(200);
   });
 
-  it('leaves client frames unanswered while the send buffer is backed up', () => {
+  it('bases the soft threshold on the granted rate, not the requested one', () => {
+    const { socket, session } = open({ rate: 20_000 });
+    run(session, T0, T0 + 3000, (due) => Math.min(due, 3));
+    // Granted ≈ 60 events/s: about a second of that is far below what 20,000/s would allow.
+    socket.bufferedAmount = MIN_SOFT_BUFFER_BYTES + 1;
+    expect(session.due(T0 + 3050)).toBe(0);
+    expect(session.droppedEvents).toBeGreaterThan(0);
+  });
+
+  it('applies configure while backed up and answers once the buffer drains', () => {
     const { socket, session } = open();
     const sent = socket.messages.length;
     socket.bufferedAmount = softBufferLimit(200) + 1;
-    session.receive(fixture('configure.json'), T0 + 10);
+    session.receive(JSON.stringify({ type: 'configure', requestId: 'slow-1', rate: 50 }), T0 + 10);
+    session.receive(fixture('configure.json'), T0 + 15);
     session.receive('not json', T0 + 20);
     session.receiveBinary(T0 + 30);
     expect(socket.messages).toHaveLength(sent);
-    expect(session.ignoredFrames).toBe(3);
+    expect(session.ignoredFrames).toBe(2);
+    expect(session.settings).toEqual({ rate: 20_000, scenario: 'error-burst', seed: 42 });
+
+    run(session, T0, T0 + 100);
+    expect(socket.ofType('config')).toEqual([]);
+    socket.bufferedAmount = 0;
+    run(session, T0 + 100, T0 + 200);
+    // One answer with the latest settings and request id.
+    expect(socket.ofType('config')).toEqual([JSON.parse(fixture('config.json'))]);
     expect(socket.closes).toEqual([]);
+  });
+
+  it('becomes backpressured with a second of writes in flight and terminates a stalled socket', () => {
+    const { socket, session } = open();
+    socket.holdWrites = true;
+    run(session, T0, T0 + 2000);
+    // Heartbeats still go out while backpressured; nothing else does.
+    expect(session.inFlight).toBeGreaterThanOrEqual(SOFT_IN_FLIGHT_MESSAGES);
+    expect(session.inFlight).toBeLessThanOrEqual(SOFT_IN_FLIGHT_MESSAGES + 2);
+    const batches = socket.ofType('batch').length;
+    expect(session.droppedEvents).toBeGreaterThan(0);
+    // Completing writes below half of the limit lets the stream continue, with the gap reported.
+    while (session.inFlight > SOFT_IN_FLIGHT_MESSAGES / 2) socket.completeWrite();
+    run(session, T0 + 2000, T0 + 2050);
+    expect(socket.ofType('batch')).toHaveLength(batches + 1);
+    expect(socket.ofType('batch').at(-1)?.dropped).toBeGreaterThan(0);
+    // Then nothing is written for STALL_TIMEOUT_MS: the client reads nothing.
+    run(session, T0 + 2050, T0 + 2050 + STALL_TIMEOUT_MS + 100);
+    expect(socket.terminated).toBe(true);
+    expect(session.endReason).toBe('stalled');
+  });
+
+  it('terminates a socket whose in-flight writes keep growing past the hard cap', () => {
+    const socket = new FakeSocket();
+    const session = new Session({
+      socket,
+      streamId: 'st_slow',
+      settings: { rate: 200, scenario: 'steady', seed: 1 },
+      limits: { ...LIMITS, sessionMaxMs: 600_000 },
+      now: T0,
+    });
+    socket.onPing = () => {
+      session.pong();
+    };
+    session.start();
+    socket.holdWrites = true;
+    let terminatedAt = 0;
+    for (let now = T0 + 50; now <= T0 + 300_000 && terminatedAt === 0; now += 50) {
+      // A trickle of completed writes keeps the socket from counting as stalled.
+      if ((now - T0) % 5000 === 0) socket.completeWrite();
+      session.flush(now, session.due(now));
+      if (socket.terminated) terminatedAt = now;
+    }
+    expect(session.endReason).toBe('buffer-overflow');
+    expect(socket.pendingWrites.length).toBeGreaterThan(MAX_IN_FLIGHT_MESSAGES);
+    expect(terminatedAt).toBeGreaterThan(T0);
   });
 
   it('keeps memory bounded when a client floods within the rate limit but never reads', () => {
@@ -261,6 +351,14 @@ describe('Session', () => {
     expect(session.endReason).toBe('buffer-overflow');
     // The heartbeat due in the same tick was not sent after the termination.
     expect(socket.ofType('heartbeat')).toEqual([]);
+  });
+
+  it('charges client pings to the message rate limit', () => {
+    const { socket, session } = open();
+    for (let index = 0; index <= CLIENT_MESSAGE_BURST; index++) session.receivePing(T0);
+    expect(socket.closes).toEqual([
+      { code: CLOSE_CODES.policyViolation, reason: 'too many messages' },
+    ]);
   });
 
   it('closes with 1008 when a client floods it with messages', () => {

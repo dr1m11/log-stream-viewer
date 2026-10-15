@@ -22,6 +22,7 @@ import {
   BUSY_RETRY_AFTER_S,
   createServer,
   type MockServer,
+  PER_IP_SOCKET_HEADROOM,
   type ServerDeps,
   UPGRADE_HEADROOM,
 } from './server.ts';
@@ -212,7 +213,11 @@ function handshake(
 }
 
 /** Upgrades a raw TCP socket (no WebSocket library), which then misbehaves as a test needs. */
-function rawUpgrade(port: number, path: string): Promise<{ socket: Duplex; status: number }> {
+function rawUpgrade(
+  port: number,
+  path: string,
+  headers: Record<string, string> = {},
+): Promise<{ socket: Duplex; status: number }> {
   return new Promise((resolve, reject) => {
     const req = request({
       host: '127.0.0.1',
@@ -223,6 +228,7 @@ function rawUpgrade(port: number, path: string): Promise<{ socket: Duplex; statu
         Upgrade: 'websocket',
         'Sec-WebSocket-Version': '13',
         'Sec-WebSocket-Key': randomBytes(16).toString('base64'),
+        ...headers,
       },
     });
     req.on('upgrade', (response, socket) => {
@@ -391,7 +397,8 @@ describe('mock server', () => {
     const { url, logs } = await start();
     const client = new TestClient(`${url}?v=1`);
     await client.next('hello');
-    for (let index = 0; index <= CLIENT_MESSAGE_BURST; index++) client.send('{}');
+    // Twice the burst: the bucket refills while the client compresses and sends the frames.
+    for (let index = 0; index < 2 * CLIENT_MESSAGE_BURST; index++) client.send('{}');
     expect(await client.closed).toEqual({
       code: CLOSE_CODES.policyViolation,
       reason: 'too many messages',
@@ -538,13 +545,43 @@ describe('mock server', () => {
   });
 
   it('refuses handshakes with 503 when too many sockets are open or closing', async () => {
-    const { port, logs } = await start({ maxConnections: 1 }, { closeTimeoutMs: 10_000 });
-    // Rejected (4001) sockets that never answer the close stay counted until closeTimeout.
-    const held = await Promise.all(
-      Array.from({ length: 1 + UPGRADE_HEADROOM }, () => rawUpgrade(port, '/ws?v=2')),
+    const { port, logs } = await start(
+      { maxConnections: 1, trustProxyIpHeader: true },
+      { closeTimeoutMs: 10_000 },
     );
-    expect(await handshake(port, '/ws?v=1')).toBe(503);
+    // Rejected (4001) sockets that never answer the close stay counted until closeTimeout; they
+    // come from many addresses, so no single address hits its own limit first.
+    const held = await Promise.all(
+      Array.from({ length: 1 + UPGRADE_HEADROOM }, (_, index) =>
+        rawUpgrade(port, '/ws?v=2', { 'Fly-Client-IP': `198.51.100.${String(index + 1)}` }),
+      ),
+    );
+    expect(await handshake(port, '/ws?v=1', { 'Fly-Client-IP': '203.0.113.9' })).toBe(503);
     expect(logs).toContainEqual(expect.stringMatching(/^reject status=503 reason=flood /));
+    for (const { socket } of held) socket.destroy();
+  });
+
+  it('refuses a flooding address with 429 without locking out other addresses', async () => {
+    const { port, url, logs } = await start(
+      { maxConnections: 5, maxConnectionsPerIp: 1, trustProxyIpHeader: true },
+      { closeTimeoutMs: 10_000 },
+    );
+    const flooder = { 'Fly-Client-IP': '203.0.113.66' };
+    // One open stream, then rejected (4029) sockets from the same address that never answer the
+    // close: they stay counted until closeTimeout.
+    await new TestClient(`${url}?v=1`, { headers: flooder }).next('hello');
+    const held = await Promise.all(
+      Array.from({ length: PER_IP_SOCKET_HEADROOM }, () => rawUpgrade(port, '/ws?v=1', flooder)),
+    );
+    // Everything else from that address is refused before the upgrade…
+    const statuses = await Promise.all(
+      Array.from({ length: 20 }, () => handshake(port, '/ws?v=1', flooder)),
+    );
+    expect(new Set(statuses)).toEqual(new Set([429]));
+    expect(logs).toContainEqual(expect.stringMatching(/^reject status=429 reason=per-ip-flood /));
+    // …and another address still gets a stream: the flood used only its own headroom.
+    const other = new TestClient(`${url}?v=1`, { headers: { 'Fly-Client-IP': '203.0.113.7' } });
+    await other.next('hello');
     for (const { socket } of held) socket.destroy();
   });
 });

@@ -40,7 +40,12 @@ import {
 import { clientAddress, ipKey } from './client-ip.ts';
 import { isOriginAllowed, type ServerConfig } from './config.ts';
 import { StreamHub } from './hub.ts';
-import { clampRate, Session } from './session.ts';
+import {
+  clampRate,
+  COMPRESSED_EVENT_BYTES_ESTIMATE,
+  EVENT_BYTES_ESTIMATE,
+  Session,
+} from './session.ts';
 
 /** Delay a client should wait after a 4029 rejection (`busy; retry-after=30`). */
 export const BUSY_RETRY_AFTER_S = 30;
@@ -57,6 +62,13 @@ const SHUTDOWN_GRACE_MS = 2000;
  * which is acceptable here — legitimate clients get 4029 long before.
  */
 export const UPGRADE_HEADROOM = 10;
+/**
+ * Flood protection per client address (IP key): sockets of one key — open, rejected or still
+ * closing — beyond `MAX_CONNECTIONS_PER_IP` that the server still upgrades (so a few extra tabs
+ * get a readable 4029). Above it the handshake is refused with HTTP 429 before the upgrade, so
+ * one address cannot use up the global headroom and lock everybody else out.
+ */
+export const PER_IP_SOCKET_HEADROOM = 3;
 /** `/healthz` reports latency percentiles over windows of this length. */
 const STATS_WINDOW_MS = 10_000;
 /** A failing tick is logged at most this often. */
@@ -221,7 +233,10 @@ export function createServer(
     log(`session-error stream=${session.streamId} error=${quote(errorText(error))}`);
     session.terminate();
   });
+  /** Open streams per IP key (the `MAX_CONNECTIONS_PER_IP` cap, answered with 4029). */
   const connectionsPerIp = new Map<string, number>();
+  /** Upgraded sockets per IP key, rejected and closing ones included (the 429 flood guard). */
+  const socketsPerKey = new Map<string, number>();
   let ticker: NodeJS.Timeout | undefined;
   let closing: Promise<void> | undefined;
   let lastTickErrorAt = Number.NEGATIVE_INFINITY;
@@ -361,9 +376,25 @@ export function createServer(
       abortHandshake(socket, 503);
       return;
     }
+    const key = ipKey(address);
+    const sockets = socketsPerKey.get(key) ?? 0;
+    if (sockets >= config.maxConnectionsPerIp + PER_IP_SOCKET_HEADROOM) {
+      log(
+        `reject status=429 reason=per-ip-flood sockets=${String(sockets)} ip=${quote(address)} key=${quote(key)}`,
+      );
+      abortHandshake(socket, 429);
+      return;
+    }
     socket.off('error', destroy);
     wss.handleUpgrade(request, socket, head, (ws) => {
-      accept(ws, address, query);
+      // Every upgraded socket counts for its key until it is closed: open, rejected or closing.
+      socketsPerKey.set(key, (socketsPerKey.get(key) ?? 0) + 1);
+      ws.once('close', () => {
+        const left = (socketsPerKey.get(key) ?? 1) - 1;
+        if (left > 0) socketsPerKey.set(key, left);
+        else socketsPerKey.delete(key);
+      });
+      accept(ws, address, key, query);
     });
   }
 
@@ -377,7 +408,7 @@ export function createServer(
     ws.close(code, reason);
   }
 
-  function accept(ws: WebSocket, address: string, query: string): void {
+  function accept(ws: WebSocket, address: string, key: string, query: string): void {
     const parsed = parseConnectionQuery(query);
     if (!parsed.ok || parsed.value.params.version !== PROTOCOL_VERSION) {
       // The issue value is already cut to MAX_ISSUE_VALUE_LENGTH by the protocol parser.
@@ -406,7 +437,6 @@ export function createServer(
       reject(ws, CLOSE_CODES.busy, busy, `reason=capacity ip=${quote(address)}`);
       return;
     }
-    const key = ipKey(address);
     const fromIp = connectionsPerIp.get(key) ?? 0;
     if (fromIp >= config.maxConnectionsPerIp) {
       reject(ws, CLOSE_CODES.busy, busy, `reason=per-ip ip=${quote(address)} key=${quote(key)}`);
@@ -424,6 +454,10 @@ export function createServer(
       },
       limits,
       now: clock(),
+      // The send buffer holds compressed frames when the client negotiated permessage-deflate.
+      bytesPerEvent: ws.extensions.includes('permessage-deflate')
+        ? COMPRESSED_EVENT_BYTES_ESTIMATE
+        : EVENT_BYTES_ESTIMATE,
     });
     connectionsPerIp.set(key, fromIp + 1);
     hub.add(session);
@@ -436,6 +470,9 @@ export function createServer(
     ws.on('message', (data, isBinary) => {
       if (isBinary) session.receiveBinary(clock());
       else session.receive(rawDataToText(data), clock());
+    });
+    ws.on('ping', () => {
+      session.receivePing(clock());
     });
     ws.on('pong', () => {
       session.pong();
