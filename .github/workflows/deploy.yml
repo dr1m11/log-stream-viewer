@@ -1,0 +1,91 @@
+name: Deploy
+
+# Order (docs/adr/0003): the mock server first, then the web app, so a client never ships before a
+# server that speaks its protocol. Runs next to CI on main; the ruleset only lets PRs with a green
+# CI reach main.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      force-server:
+        description: Deploy the mock server even if none of its files changed
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# One deploy per ref at a time; a newer push waits instead of cancelling a deploy halfway.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      server: ${{ steps.filter.outputs.server }}
+    steps:
+      # Credentials stay: on a push, paths-filter fetches the commit before the push to diff against.
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          filters: |
+            server:
+              - 'apps/mock-server/**'
+              - 'packages/protocol/**'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'package.json'
+              - '.dockerignore'
+              - 'scripts/smoke-ws.ts'
+
+  server:
+    name: Mock server (Fly.io)
+    needs: changes
+    # Production runs main only, also when dispatched by hand.
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (needs.changes.outputs.server == 'true' || inputs.force-server)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: mock-server
+      url: https://log-stream-viewer-mock.fly.dev/healthz
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # 1.6
+
+      # The repository root is the build context (see the root .dockerignore); one machine, no
+      # standby (--ha=false). GIT_SHA becomes /healthz `version`.
+      - name: Deploy to Fly.io
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: >-
+          flyctl deploy .
+          --config apps/mock-server/fly.toml
+          --dockerfile apps/mock-server/Dockerfile
+          --remote-only
+          --ha=false
+          --build-arg GIT_SHA="$GITHUB_SHA"
+
+      - uses: ./.github/actions/setup
+      # Through Fly's proxy with the production client's Origin: /healthz reports this commit, the
+      # stream sends hello and a batch. Retries for 30 s while the machine starts or resumes.
+      - name: Smoke-test the stream
+        run: >-
+          node scripts/smoke-ws.ts wss://log-stream-viewer-mock.fly.dev/ws
+          --origin https://log-stream-viewer.marat-gabdrashitov17.workers.dev
+          --expect-version "$GITHUB_SHA"
+
+  # PR6 adds the web app's jobs here. `production` must run after `server`, also when `server` was
+  # skipped, but never after a failed server deploy:
+  #   needs: [changes, server]
+  #   if: ${{ !cancelled() && !failure() && github.ref == 'refs/heads/main' }}
+  # `preview` (pull_request events) connects to the production mock server.
