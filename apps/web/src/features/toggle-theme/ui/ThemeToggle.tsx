@@ -9,6 +9,8 @@ const LABELS: Record<ThemePreference, string> = {
 /**
  * Segmented control for the colour theme. Native radios in a fieldset give the group its name,
  * arrow-key navigation and the checked state for screen readers without any extra scripting.
+ * The checked option is filled with the accent colour, which keeps at least 3:1 against the track
+ * in both themes (WCAG 1.4.11); the focus ring is offset so it stays visible next to the fill.
  */
 export function ThemeToggle() {
   const { preference, setPreference } = useTheme();
@@ -19,7 +21,7 @@ export function ThemeToggle() {
       {THEME_PREFERENCES.map((option) => (
         <label
           key={option}
-          className="cursor-pointer rounded-md px-2.5 py-1 text-fg-muted transition-colors select-none hover:text-fg has-checked:bg-surface-raised has-checked:text-fg has-checked:shadow-sm has-focus-visible:outline-2 has-focus-visible:outline-focus"
+          className="cursor-pointer rounded-md px-2.5 py-1 text-fg-muted transition-colors select-none not-has-checked:hover:text-fg has-checked:bg-accent has-checked:font-medium has-checked:text-surface-raised has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-focus"
         >
           <input
             type="radio"
