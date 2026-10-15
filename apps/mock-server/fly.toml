@@ -1,0 +1,51 @@
+# Fly.io app of the mock server (docs/adr/0003). .github/workflows/deploy.yml deploys it from the
+# repository root, which is the Docker build context:
+#
+#   flyctl deploy . --config apps/mock-server/fly.toml --dockerfile apps/mock-server/Dockerfile \
+#     --remote-only --ha=false --build-arg GIT_SHA=<commit>
+#
+# Validate changes with `flyctl config validate -c apps/mock-server/fly.toml`.
+
+app = "log-stream-viewer-mock"
+primary_region = "fra"
+
+[build]
+  # Relative to this file; the context stays the working directory passed to `flyctl deploy`.
+  dockerfile = "Dockerfile"
+
+# Parsed by apps/mock-server/src/config.ts (limits: docs/adr/0005). GIT_SHA comes from the build arg.
+[env]
+  NODE_ENV = "production"
+  PORT = "8080"
+  HOST = "0.0.0.0"
+  MAX_RATE = "5000"
+  GLOBAL_MAX_EVENTS_PER_SEC = "10000"
+  # The production client and its per-PR previews; a literal string keeps the regex backslashes.
+  ALLOWED_ORIGINS = 'https://log-stream-viewer.marat-gabdrashitov17.workers.dev,^https://pr-\d+-log-stream-viewer\.marat-gabdrashitov17\.workers\.dev$'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Suspend (resume in well under a second) when the proxy sees no connections; an open WebSocket
+  # is a connection, so a watched stream keeps the machine running.
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  # Counted in connections because streams are long-lived WebSockets. hard_limit sits above the
+  # app's MAX_CONNECTIONS (50) so that the app, not the proxy, turns extra clients away with 4029.
+  [http_service.concurrency]
+    type = "connections"
+    soft_limit = 50
+    hard_limit = 60
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/healthz"
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "10s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
