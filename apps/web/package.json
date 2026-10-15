@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:local": "vite build --mode localhost",
     "preview": "vite preview",
     "typecheck": "tsc -b",
     "lint:fsd": "steiger ./src",

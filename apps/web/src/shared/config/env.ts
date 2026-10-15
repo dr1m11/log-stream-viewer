@@ -1,11 +1,11 @@
-/** Local mock server (`pnpm dev`, `pnpm test:e2e`). */
-const DEFAULT_STREAM_URL = 'ws://localhost:8787/ws';
+import { LOCAL_STREAM_URL } from './stream-url';
 
 const fromEnv = import.meta.env.VITE_STREAM_URL?.trim();
 
 /**
- * WebSocket endpoint of the mock server, without the query (`ws://host:port/ws`). Set at build
- * time with `VITE_STREAM_URL`; production builds point it at the deployed server.
+ * WebSocket endpoint of the mock server, without the query (`ws://host:port/ws`), from
+ * `VITE_STREAM_URL`. Production builds must set it (vite.config.ts fails the build otherwise);
+ * dev, tests and `pnpm build:local` fall back to the local mock server.
  */
 export const STREAM_URL: string =
-  fromEnv === undefined || fromEnv === '' ? DEFAULT_STREAM_URL : fromEnv;
+  fromEnv === undefined || fromEnv === '' ? LOCAL_STREAM_URL : fromEnv;

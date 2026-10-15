@@ -9,7 +9,8 @@ Product scope: `docs/product-spec.md`. Stages and current stage: `docs/roadmap.m
 | ---------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `pnpm dev`                         | Mock server (:8787) + Vite dev server (:5173) in parallel — long-running, start it in the background |
 | `pnpm dev:web` / `pnpm dev:server` | Vite dev server only (:5173) / mock server only (`node --watch`, :8787) — long-running, background   |
-| `pnpm build` / `pnpm preview`      | Production build of `apps/web` / serve it on :4173 (`vite preview`, long-running, background)        |
+| `pnpm build` / `pnpm build:local`  | Production build of `apps/web`: needs `VITE_STREAM_URL` / for the local mock server (verify, e2e)    |
+| `pnpm preview`                     | Serve the build on :4173 (`vite preview`) — long-running, background                                 |
 | `pnpm verify`                      | format check → lint → Steiger → typecheck → unit tests → hook tests → build. **Green before a PR**   |
 | `pnpm verify:full`                 | `verify` + Playwright e2e                                                                            |
 | `pnpm lint` / `pnpm lint:fsd`      | ESLint / Steiger (FSD boundaries)                                                                    |

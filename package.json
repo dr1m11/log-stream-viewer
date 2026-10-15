@@ -15,6 +15,7 @@
     "dev:web": "pnpm --filter @lsv/web dev",
     "dev:server": "pnpm --filter @lsv/mock-server dev",
     "build": "pnpm --recursive --if-present build",
+    "build:local": "pnpm --filter @lsv/web build:local",
     "preview": "pnpm --filter @lsv/web preview",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -27,7 +28,7 @@
     "bench": "vitest bench --run --reporter=verbose",
     "test:e2e": "pnpm --recursive --if-present test:e2e",
     "test:hooks": "node --test \".claude/hooks/*.test.mjs\" \"scripts/*.test.mjs\"",
-    "verify": "pnpm format:check && pnpm lint && pnpm lint:fsd && pnpm typecheck && pnpm test && pnpm test:hooks && pnpm build",
+    "verify": "pnpm format:check && pnpm lint && pnpm lint:fsd && pnpm typecheck && pnpm test && pnpm test:hooks && pnpm build:local",
     "verify:full": "pnpm verify && pnpm test:e2e",
     "ports:free": "node scripts/free-ports.mjs",
     "prepare": "husky"
