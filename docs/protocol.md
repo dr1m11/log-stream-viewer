@@ -78,7 +78,7 @@ Client → server:
 | `traceId` | non-empty string, optional | Correlates events of one request across services.                       |
 | `payload` | JSON object, optional      | HTTP details, latency, ids, error stack… Not validated deeply.          |
 
-Client frames are limited to `MAX_CLIENT_MESSAGE_BYTES` (4096); a bigger one closes the socket with 1009. Their rate is limited per connection to `MAX_CLIENT_MESSAGES_PER_SECOND` (20) with bursts of `CLIENT_MESSAGE_BURST` (40); a client that sends faster is closed with 1008. While the server's send buffer for a connection is backed up (the client is not reading), it does not answer client frames.
+Client frames are limited to `MAX_CLIENT_MESSAGE_BYTES` (4096); a bigger one closes the socket with 1009. Their rate is limited per connection to `MAX_CLIENT_MESSAGES_PER_SECOND` (20) with bursts of `CLIENT_MESSAGE_BURST` (40), WebSocket pings included; a client that sends faster is closed with 1008. While the server's send buffer for a connection is backed up (the client is not reading), it still applies a valid `configure` but holds back the answer: once the buffer drains it sends one `config` with the current settings, echoing the `requestId` of the latest `configure`. Malformed, binary or unknown frames get no `error` during that time.
 
 ### Golden fixtures
 
@@ -155,4 +155,4 @@ Deploy order: **server first**. PR previews and tabs that are still open use the
 ## Changelog
 
 - v1 — 2026-10-14 — initial
-- v1 — 2026-10-15 — client message rate limit (`MAX_CLIENT_MESSAGES_PER_SECOND`, `CLIENT_MESSAGE_BURST`) and close code 1008 `policyViolation` — additive (unknown codes already mean "reconnect with backoff")
+- v1 — 2026-10-15 — client message rate limit, frames and pings (`MAX_CLIENT_MESSAGES_PER_SECOND`, `CLIENT_MESSAGE_BURST`), and close code 1008 `policyViolation` — additive (unknown codes already mean "reconnect with backoff")

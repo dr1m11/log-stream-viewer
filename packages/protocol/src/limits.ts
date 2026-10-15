@@ -23,8 +23,8 @@ export const HEARTBEAT_INTERVAL_MS = 1000;
 export const MAX_CLIENT_MESSAGE_BYTES = 4096;
 
 /**
- * Sustained rate of client frames the server accepts per connection (a token bucket of
- * {@link CLIENT_MESSAGE_BURST}); a client that sends faster is closed with 1008.
+ * Sustained rate of client frames, WebSocket pings included, the server accepts per connection (a
+ * token bucket of {@link CLIENT_MESSAGE_BURST}); a client that sends faster is closed with 1008.
  */
 export const MAX_CLIENT_MESSAGES_PER_SECOND = 20;
 
