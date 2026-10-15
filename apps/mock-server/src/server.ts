@@ -1,5 +1,4 @@
 import { randomInt, randomUUID } from 'node:crypto';
-import { once } from 'node:events';
 import {
   createServer as createHttpServer,
   type IncomingMessage,
@@ -8,6 +7,13 @@ import {
   STATUS_CODES,
 } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import {
+  createHistogram,
+  type Histogram,
+  monitorEventLoopDelay,
+  performance,
+} from 'node:perf_hooks';
+import process from 'node:process';
 import type { Duplex } from 'node:stream';
 
 import {
@@ -23,20 +29,51 @@ import {
   STREAM_PATH,
   type StreamLimits,
 } from '@lsv/protocol';
-import { type RawData, type WebSocket, WebSocketServer } from 'ws';
+import {
+  type PerMessageDeflateOptions,
+  type RawData,
+  type ServerOptions,
+  type WebSocket,
+  WebSocketServer,
+} from 'ws';
 
+import { clientAddress, ipKey } from './client-ip.ts';
 import { isOriginAllowed, type ServerConfig } from './config.ts';
 import { StreamHub } from './hub.ts';
 import { clampRate, Session } from './session.ts';
 
 /** Delay a client should wait after a 4029 rejection (`busy; retry-after=30`). */
 export const BUSY_RETRY_AFTER_S = 30;
-/** A rejected socket that does not finish the closing handshake in time is destroyed. */
-const REJECT_TIMEOUT_MS = 5000;
+/**
+ * A socket the server closed (rejection, expiry, shutdown) that does not finish the closing
+ * handshake within this time is destroyed, so it frees its slot (ws `closeTimeout`).
+ */
+export const CLOSE_TIMEOUT_MS = 5000;
 /** On shutdown, clients get this long to answer the 1001 close before their sockets are destroyed. */
 const SHUTDOWN_GRACE_MS = 2000;
+/**
+ * Flood protection: sockets (open, rejected or still closing) the server tolerates beyond
+ * `MAX_CONNECTIONS` before it refuses handshakes with HTTP 503. Browsers see that only as 1006,
+ * which is acceptable here — legitimate clients get 4029 long before.
+ */
+export const UPGRADE_HEADROOM = 10;
+/** `/healthz` reports latency percentiles over windows of this length. */
+const STATS_WINDOW_MS = 10_000;
+/** A failing tick is logged at most this often. */
+const TICK_ERROR_LOG_INTERVAL_MS = 10_000;
 
-/** Side effects of the server, replaceable in tests and measurements. */
+/**
+ * permessage-deflate settings of every deployment: fast compression (level 1) with the server
+ * keeping its compression context between messages, which is where the ratio comes from (keys
+ * repeat across batches). With context takeover ws compresses every message — its `threshold`
+ * option applies only without it — so none is set. Smaller zlib windows were measured and
+ * rejected (docs/adr/0005).
+ */
+export const DEFLATE_OPTIONS: PerMessageDeflateOptions = {
+  zlibDeflateOptions: { level: 1 },
+};
+
+/** Side effects and tuning of the server, replaceable in tests and measurements. */
 export interface ServerDeps {
   /** Wall clock, epoch ms. */
   readonly clock: () => number;
@@ -45,8 +82,12 @@ export interface ServerDeps {
   readonly newStreamId: () => string;
   /** Seed for a client that did not ask for one. */
   readonly newSeed: () => number;
-  /** permessage-deflate; on in every deployment, off only to measure its cost. */
-  readonly deflate: boolean;
+  /** permessage-deflate settings, or `false` to turn it off (measurements only). */
+  readonly perMessageDeflate: PerMessageDeflateOptions | false;
+  /** See {@link CLOSE_TIMEOUT_MS}. */
+  readonly closeTimeoutMs: number;
+  /** Length of the `/healthz` latency windows. */
+  readonly statsWindowMs: number;
 }
 
 const DEFAULT_DEPS: ServerDeps = {
@@ -56,16 +97,16 @@ const DEFAULT_DEPS: ServerDeps = {
   },
   newStreamId: () => `st_${randomUUID().replaceAll('-', '')}`,
   newSeed: () => randomInt(0, MAX_SEED + 1),
-  deflate: true,
+  perMessageDeflate: DEFLATE_OPTIONS,
+  closeTimeoutMs: CLOSE_TIMEOUT_MS,
+  statsWindowMs: STATS_WINDOW_MS,
 };
 
-export interface MockServer {
-  /** Starts listening on `config.host:config.port` (port 0 picks a free port). */
-  listen(): Promise<AddressInfo>;
-  /** Closes every stream with 1001, stops the tick timer and the HTTP server. Idempotent. */
-  close(): Promise<void>;
-  /** Where the server listens, once it does. */
-  readonly address: AddressInfo | undefined;
+/** Percentiles of a latency in milliseconds. */
+export interface LatencySummary {
+  readonly p50: number;
+  readonly p99: number;
+  readonly max: number;
 }
 
 /** `/healthz` response body. */
@@ -77,6 +118,25 @@ export interface Health {
   /** Open streams. */
   readonly connections: number;
   readonly eventsPerSec: number;
+  /** Resident set size of the process. */
+  readonly rssMb: number;
+  /** Event-loop delay over the last complete stats window (the current one before that). */
+  readonly eventLoopDelayMs: LatencySummary;
+  /** Duration of one tick (all streams) over the same window. */
+  readonly tickMs: LatencySummary;
+}
+
+export interface MockServer {
+  /** Starts listening on `config.host:config.port` (port 0 picks a free port). */
+  listen(): Promise<AddressInfo>;
+  /** Closes every stream with 1001, stops the tick timer and the HTTP server. Idempotent; never rejects. */
+  close(): Promise<void>;
+  /** Where the server listens, once it does. */
+  readonly address: AddressInfo | undefined;
+  /** The `/healthz` body. */
+  health(): Health;
+  /** Starts a new latency window now (benchmarks measure from a known point). */
+  resetStats(): void;
 }
 
 /** JSON string of a client-supplied value for log lines: quoted, escaped and truncated. */
@@ -84,22 +144,15 @@ function quote(value: string | undefined): string {
   return value === undefined ? '-' : JSON.stringify(value.slice(0, 200));
 }
 
+function errorText(error: unknown): string {
+  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+}
+
 function splitTarget(target = '/'): { pathname: string; query: string } {
   const mark = target.indexOf('?');
   return mark === -1
     ? { pathname: target, query: '' }
     : { pathname: target.slice(0, mark), query: target.slice(mark + 1) };
-}
-
-/** Client address: `Fly-Client-IP` behind the Fly proxy, the socket's peer otherwise. */
-function clientIp(request: IncomingMessage): string {
-  const header = request.headers['fly-client-ip'];
-  const forwarded = (Array.isArray(header) ? header[0] : header)?.trim();
-  const ip =
-    forwarded !== undefined && forwarded !== ''
-      ? forwarded
-      : (request.socket.remoteAddress ?? 'unknown');
-  return ip.startsWith('::ffff:') ? ip.slice('::ffff:'.length) : ip;
 }
 
 function rawDataToText(data: RawData): string {
@@ -121,13 +174,30 @@ function abortHandshake(socket: Duplex, status: number): void {
   );
 }
 
+/** Resolves when the socket has closed; never rejects (a socket `error` must not break shutdown). */
 function waitForClose(ws: WebSocket): Promise<void> {
   if (ws.readyState === ws.CLOSED) return Promise.resolve();
-  return once(ws, 'close').then(() => undefined);
+  return new Promise((resolve) => {
+    ws.once('close', () => {
+      resolve();
+    });
+  });
 }
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms).unref());
+}
+
+const round2 = (value: number): number => Math.round(value * 100) / 100;
+
+/** Percentiles of a histogram recorded in `unitsPerMs` units (ns for the event loop, µs for ticks). */
+function summarize(histogram: Histogram, unitsPerMs: number): LatencySummary {
+  if (histogram.count === 0) return { p50: 0, p99: 0, max: 0 };
+  return {
+    p50: round2(histogram.percentile(50) / unitsPerMs),
+    p99: round2(histogram.percentile(99) / unitsPerMs),
+    max: round2(histogram.max / unitsPerMs),
+  };
 }
 
 /**
@@ -146,35 +216,78 @@ export function createServer(
     maxRate: config.maxRate,
     sessionMaxMs: config.sessionMaxMs,
   };
-  const hub = new StreamHub<Session>(config.globalMaxEventsPerSec, startedAt);
+  const hub = new StreamHub<Session>(config.globalMaxEventsPerSec, startedAt, (session, error) => {
+    // The hub has dropped the session; it is logged once and its socket destroyed.
+    log(`session-error stream=${session.streamId} error=${quote(errorText(error))}`);
+    session.terminate();
+  });
   const connectionsPerIp = new Map<string, number>();
   let ticker: NodeJS.Timeout | undefined;
   let closing: Promise<void> | undefined;
+  let lastTickErrorAt = Number.NEGATIVE_INFINITY;
+
+  const loopDelay = monitorEventLoopDelay({ resolution: 20 });
+  loopDelay.enable();
+  const tickDurations = createHistogram();
+  let statsWindowStart = startedAt;
+  let lastWindow: Pick<Health, 'eventLoopDelayMs' | 'tickMs'> | undefined;
 
   const http = createHttpServer(handleRequest);
-  const wss = new WebSocketServer({
+  // `closeTimeout` exists in ws 8.22 but not yet in @types/ws 8.18.
+  const wsOptions: ServerOptions & { readonly closeTimeout: number } = {
     noServer: true,
     maxPayload: MAX_CLIENT_MESSAGE_BYTES,
-    perMessageDeflate: deps.deflate ? { zlibDeflateOptions: { level: 1 }, threshold: 1024 } : false,
-  });
+    perMessageDeflate: deps.perMessageDeflate,
+    // Browsers never send pings; answering them would let a client that does not read make the
+    // server queue pongs. Liveness is the server's own ping/pong (session.ts).
+    autoPong: false,
+    closeTimeout: deps.closeTimeoutMs,
+  };
+  const wss = new WebSocketServer(wsOptions);
   http.on('upgrade', handleUpgrade);
 
+  function windowStats(): Pick<Health, 'eventLoopDelayMs' | 'tickMs'> {
+    return { eventLoopDelayMs: summarize(loopDelay, 1e6), tickMs: summarize(tickDurations, 1e3) };
+  }
+
+  function resetStats(now: number): void {
+    loopDelay.reset();
+    tickDurations.reset();
+    statsWindowStart = now;
+  }
+
+  function rollStats(now: number): void {
+    if (now - statsWindowStart < deps.statsWindowMs) return;
+    lastWindow = windowStats();
+    resetStats(now);
+  }
+
   function tick(): void {
+    const begin = performance.now();
+    const now = clock();
     try {
-      hub.tick(clock());
+      hub.tick(now);
     } catch (error) {
-      log(`tick-error ${quote(String(error))}`);
+      if (now - lastTickErrorAt >= TICK_ERROR_LOG_INTERVAL_MS) {
+        lastTickErrorAt = now;
+        log(`tick-error ${quote(errorText(error))}`);
+      }
     }
+    tickDurations.record(Math.max(1, Math.round((performance.now() - begin) * 1000)));
+    rollStats(now);
   }
 
   function health(): Health {
     const now = clock();
+    rollStats(now);
     return {
       status: 'ok',
       version: config.gitSha,
       uptimeS: Math.floor((now - startedAt) / 1000),
       connections: hub.size,
       eventsPerSec: hub.eventsPerSec(now),
+      rssMb: Math.round(process.memoryUsage.rss() / 1024 / 1024),
+      ...(lastWindow ?? windowStats()),
     };
   }
 
@@ -230,33 +343,41 @@ export function createServer(
       abortHandshake(socket, 404);
       return;
     }
-    const ip = clientIp(request);
+    const address = clientAddress(
+      request.headers['fly-client-ip'],
+      request.socket.remoteAddress,
+      config.trustProxyIpHeader,
+    );
     const origin = request.headers.origin;
     if (!isOriginAllowed(config.origins, origin)) {
-      log(`reject status=403 reason=origin origin=${quote(origin)} ip=${quote(ip)}`);
+      log(`reject status=403 reason=origin origin=${quote(origin)} ip=${quote(address)}`);
       abortHandshake(socket, 403);
+      return;
+    }
+    if (wss.clients.size >= config.maxConnections + UPGRADE_HEADROOM) {
+      log(
+        `reject status=503 reason=flood sockets=${String(wss.clients.size)} ip=${quote(address)}`,
+      );
+      abortHandshake(socket, 503);
       return;
     }
     socket.off('error', destroy);
     wss.handleUpgrade(request, socket, head, (ws) => {
-      accept(ws, ip, query);
+      accept(ws, address, query);
     });
   }
 
-  /** Closes an upgraded socket with an application close code (browsers cannot read HTTP statuses). */
+  /**
+   * Closes an upgraded socket with a close code (browsers cannot read HTTP statuses). A peer that
+   * never answers the close is destroyed after `closeTimeoutMs`.
+   */
   function reject(ws: WebSocket, code: number, reason: string, details: string): void {
     log(`reject code=${String(code)} ${details}`);
     ws.on('error', () => undefined);
-    const timer = setTimeout(() => {
-      ws.terminate();
-    }, REJECT_TIMEOUT_MS).unref();
-    ws.once('close', () => {
-      clearTimeout(timer);
-    });
     ws.close(code, reason);
   }
 
-  function accept(ws: WebSocket, ip: string, query: string): void {
+  function accept(ws: WebSocket, address: string, query: string): void {
     const parsed = parseConnectionQuery(query);
     if (!parsed.ok || parsed.value.params.version !== PROTOCOL_VERSION) {
       // The issue value is already cut to MAX_ISSUE_VALUE_LENGTH by the protocol parser.
@@ -267,22 +388,28 @@ export function createServer(
         ws,
         CLOSE_CODES.unsupportedVersion,
         'unsupported protocol version',
-        `reason=version ${detail} ip=${quote(ip)}`,
+        `reason=version ${detail} ip=${quote(address)}`,
       );
       return;
     }
     if (closing !== undefined) {
-      reject(ws, CLOSE_CODES.goingAway, 'server shutting down', `reason=shutdown ip=${quote(ip)}`);
+      reject(
+        ws,
+        CLOSE_CODES.goingAway,
+        'server shutting down',
+        `reason=shutdown ip=${quote(address)}`,
+      );
       return;
     }
     const busy = busyCloseReason(BUSY_RETRY_AFTER_S);
     if (hub.size >= config.maxConnections) {
-      reject(ws, CLOSE_CODES.busy, busy, `reason=capacity ip=${quote(ip)}`);
+      reject(ws, CLOSE_CODES.busy, busy, `reason=capacity ip=${quote(address)}`);
       return;
     }
-    const fromIp = connectionsPerIp.get(ip) ?? 0;
+    const key = ipKey(address);
+    const fromIp = connectionsPerIp.get(key) ?? 0;
     if (fromIp >= config.maxConnectionsPerIp) {
-      reject(ws, CLOSE_CODES.busy, busy, `reason=per-ip ip=${quote(ip)}`);
+      reject(ws, CLOSE_CODES.busy, busy, `reason=per-ip ip=${quote(address)} key=${quote(key)}`);
       return;
     }
 
@@ -298,7 +425,7 @@ export function createServer(
       limits,
       now: clock(),
     });
-    connectionsPerIp.set(ip, fromIp + 1);
+    connectionsPerIp.set(key, fromIp + 1);
     hub.add(session);
     ticker ??= setInterval(tick, BATCH_INTERVAL_MS);
 
@@ -307,7 +434,7 @@ export function createServer(
       log(`ws-error stream=${session.streamId} error=${quote(code)}`);
     });
     ws.on('message', (data, isBinary) => {
-      if (isBinary) session.receiveBinary();
+      if (isBinary) session.receiveBinary(clock());
       else session.receive(rawDataToText(data), clock());
     });
     ws.on('pong', () => {
@@ -315,17 +442,20 @@ export function createServer(
     });
     ws.once('close', (code) => {
       hub.remove(session);
-      const left = (connectionsPerIp.get(ip) ?? 1) - 1;
-      if (left > 0) connectionsPerIp.set(ip, left);
-      else connectionsPerIp.delete(ip);
+      const left = (connectionsPerIp.get(key) ?? 1) - 1;
+      if (left > 0) connectionsPerIp.set(key, left);
+      else connectionsPerIp.delete(key);
       if (hub.size === 0 && ticker !== undefined) {
         clearInterval(ticker);
         ticker = undefined;
       }
       const durationS = ((clock() - session.startedAt) / 1000).toFixed(1);
+      const ignoredFrames =
+        session.ignoredFrames > 0 ? ` ignoredFrames=${String(session.ignoredFrames)}` : '';
       log(
-        `close stream=${session.streamId} code=${String(code)} durationS=${durationS} ` +
-          `sent=${String(session.sentEvents)} dropped=${String(session.droppedEvents)} connections=${String(hub.size)}`,
+        `close stream=${session.streamId} code=${String(code)} reason=${session.endReason ?? 'client'} ` +
+          `durationS=${durationS} sent=${String(session.sentEvents)} dropped=${String(session.droppedEvents)}` +
+          `${ignoredFrames} connections=${String(hub.size)}`,
       );
     });
 
@@ -335,30 +465,36 @@ export function createServer(
     // Resume is reserved for B4 (docs/protocol.md): a B1 server always starts a new stream.
     const resume = params.resume === undefined ? '' : ' resume=ignored';
     log(
-      `connect stream=${session.streamId} ip=${quote(ip)} rate=${String(rate)} scenario=${scenario} ` +
+      `connect stream=${session.streamId} ip=${quote(address)} rate=${String(rate)} scenario=${scenario} ` +
         `seed=${String(seed)}${skipped === '' ? '' : ` ignored=${skipped}`}${resume} ` +
         `connections=${String(hub.size)}`,
     );
   }
 
+  /** Always runs to the end: a misbehaving client cannot keep the server listening. */
   async function shutdown(): Promise<void> {
     if (ticker !== undefined) {
       clearInterval(ticker);
       ticker = undefined;
     }
-    for (const session of hub.streams())
-      session.close(CLOSE_CODES.goingAway, 'server shutting down');
-    const clients = [...wss.clients];
-    await Promise.race([Promise.all(clients.map(waitForClose)), delay(SHUTDOWN_GRACE_MS)]);
-    const stragglers = [...wss.clients];
-    for (const ws of stragglers) ws.terminate();
-    await Promise.all(stragglers.map(waitForClose));
-    await new Promise<void>((resolve) => {
-      http.close(() => {
-        resolve();
+    try {
+      for (const session of hub.streams()) {
+        session.close(CLOSE_CODES.goingAway, 'server shutting down');
+      }
+      const clients = [...wss.clients];
+      await Promise.race([Promise.all(clients.map(waitForClose)), delay(SHUTDOWN_GRACE_MS)]);
+    } finally {
+      const stragglers = [...wss.clients];
+      for (const ws of stragglers) ws.terminate();
+      await Promise.race([Promise.all(stragglers.map(waitForClose)), delay(SHUTDOWN_GRACE_MS)]);
+      loopDelay.disable();
+      await new Promise<void>((resolve) => {
+        http.close(() => {
+          resolve();
+        });
+        http.closeAllConnections();
       });
-      http.closeAllConnections();
-    });
+    }
   }
 
   return {
@@ -370,6 +506,10 @@ export function createServer(
         http.once('error', onError);
         http.listen(config.port, config.host, () => {
           http.off('error', onError);
+          // Errors after the start (e.g. EMFILE on accept) must be logged, not crash the process.
+          http.on('error', (error: NodeJS.ErrnoException) => {
+            log(`http-error code=${error.code ?? error.name} ${quote(error.message)}`);
+          });
           const address = http.address();
           if (address === null || typeof address === 'string') {
             rejectListen(new Error('The server is not listening on a TCP port'));
@@ -380,12 +520,19 @@ export function createServer(
       });
     },
     close() {
-      closing ??= shutdown();
+      closing ??= shutdown().catch((error: unknown) => {
+        log(`shutdown-error ${quote(errorText(error))}`);
+      });
       return closing;
     },
     get address() {
       const address = http.address();
       return address === null || typeof address === 'string' ? undefined : address;
+    },
+    health,
+    resetStats() {
+      resetStats(clock());
+      lastWindow = undefined;
     },
   };
 }

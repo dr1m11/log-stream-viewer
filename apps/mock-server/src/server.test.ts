@@ -1,9 +1,11 @@
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { request } from 'node:http';
+import type { Duplex } from 'node:stream';
 
 import {
   busyCloseReason,
+  CLIENT_MESSAGE_BURST,
   CLOSE_CODES,
   isKnownErrorCode,
   type LogEvent,
@@ -16,7 +18,13 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { type ClientOptions, type RawData, WebSocket } from 'ws';
 
 import { parseConfig, type ServerConfig } from './config.ts';
-import { BUSY_RETRY_AFTER_S, createServer, type MockServer, type ServerDeps } from './server.ts';
+import {
+  BUSY_RETRY_AFTER_S,
+  createServer,
+  type MockServer,
+  type ServerDeps,
+  UPGRADE_HEADROOM,
+} from './server.ts';
 
 // --- Fixtures -------------------------------------------------------------------------------------
 
@@ -65,9 +73,11 @@ type MessageOf<T extends ServerMessage['type']> = Extract<ServerMessage, { type:
 
 const servers: MockServer[] = [];
 const sockets: WebSocket[] = [];
+const rawSockets: Duplex[] = [];
 
 afterEach(async () => {
   for (const socket of sockets.splice(0)) socket.terminate();
+  for (const socket of rawSockets.splice(0)) socket.destroy();
   await Promise.all(servers.splice(0).map((server) => server.close()));
 });
 
@@ -195,6 +205,34 @@ function handshake(
     req.on('response', (response) => {
       response.resume();
       resolve(response.statusCode ?? 0);
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+/** Upgrades a raw TCP socket (no WebSocket library), which then misbehaves as a test needs. */
+function rawUpgrade(port: number, path: string): Promise<{ socket: Duplex; status: number }> {
+  return new Promise((resolve, reject) => {
+    const req = request({
+      host: '127.0.0.1',
+      port,
+      path,
+      headers: {
+        Connection: 'Upgrade',
+        Upgrade: 'websocket',
+        'Sec-WebSocket-Version': '13',
+        'Sec-WebSocket-Key': randomBytes(16).toString('base64'),
+      },
+    });
+    req.on('upgrade', (response, socket) => {
+      socket.on('error', () => undefined);
+      socket.resume();
+      rawSockets.push(socket);
+      resolve({ socket, status: response.statusCode ?? 0 });
+    });
+    req.on('response', (response) => {
+      reject(new Error(`Upgrade refused with ${String(response.statusCode)}`));
     });
     req.on('error', reject);
     req.end();
@@ -329,8 +367,41 @@ describe('mock server', () => {
     expect((await client.closed).code).toBe(CLOSE_CODES.messageTooBig);
   });
 
-  it('closes with 4029 above the per-IP cap, counting Fly-Client-IP', async () => {
-    const { url, logs } = await start({ maxConnectionsPerIp: 2 });
+  it('ignores Fly-Client-IP unless the proxy is trusted', async () => {
+    const { url, logs } = await start({ maxConnectionsPerIp: 1, trustProxyIpHeader: false });
+    const fromIp = (ip: string) =>
+      new TestClient(`${url}?v=1`, { headers: { 'Fly-Client-IP': ip } });
+    await fromIp('203.0.113.1').next('hello');
+    expect((await fromIp('203.0.113.2').closed).code).toBe(CLOSE_CODES.busy);
+    expect(logs).toContainEqual(
+      expect.stringMatching(/^reject code=4029 reason=per-ip ip="127\.0\.0\.1"/),
+    );
+  });
+
+  it('counts IPv6 clients by their /64 prefix', async () => {
+    const { url } = await start({ maxConnectionsPerIp: 1, trustProxyIpHeader: true });
+    const fromIp = (ip: string) =>
+      new TestClient(`${url}?v=1`, { headers: { 'Fly-Client-IP': ip } });
+    await fromIp('2001:db8:1:2::1').next('hello');
+    expect((await fromIp('2001:db8:1:2:ffff::2').closed).code).toBe(CLOSE_CODES.busy);
+    await fromIp('2001:db8:1:3::1').next('hello');
+  });
+
+  it('closes with 1008 when a client floods it with messages', async () => {
+    const { url, logs } = await start();
+    const client = new TestClient(`${url}?v=1`);
+    await client.next('hello');
+    for (let index = 0; index <= CLIENT_MESSAGE_BURST; index++) client.send('{}');
+    expect(await client.closed).toEqual({
+      code: CLOSE_CODES.policyViolation,
+      reason: 'too many messages',
+    });
+    await until(() => logs.some((line) => line.startsWith('close ')));
+    expect(logs.find((line) => line.startsWith('close '))).toMatch(/ reason=message-rate /);
+  });
+
+  it('closes with 4029 above the per-IP cap, counting a trusted Fly-Client-IP', async () => {
+    const { url, logs } = await start({ maxConnectionsPerIp: 2, trustProxyIpHeader: true });
     const fromIp = (ip: string) =>
       new TestClient(`${url}?v=1`, { headers: { 'Fly-Client-IP': ip } });
     const first = fromIp('203.0.113.1');
@@ -446,11 +517,41 @@ describe('mock server', () => {
     expect(logs.join('\n')).not.toContain('"events"');
     expect(server.address).toBeUndefined();
   });
+
+  it('finishes shutdown when a client answers the close with an invalid frame', async () => {
+    const { server, port } = await start();
+    const { socket } = await rawUpgrade(port, '/ws?v=1');
+    const closing = server.close();
+    // FIN + RSV2 + text, masked, empty: RSV2 must be clear, so the server's socket errors.
+    socket.write(Buffer.from([0xa1, 0x80, 1, 2, 3, 4]));
+    await expect(closing).resolves.toBeUndefined();
+    expect(server.address).toBeUndefined();
+    socket.destroy();
+  }, 10_000);
+
+  it('destroys a rejected socket that never finishes the closing handshake', async () => {
+    const { port } = await start({}, { closeTimeoutMs: 200 });
+    const { socket } = await rawUpgrade(port, '/ws?v=2');
+    const started = Date.now();
+    await new Promise((resolve) => socket.once('close', resolve));
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it('refuses handshakes with 503 when too many sockets are open or closing', async () => {
+    const { port, logs } = await start({ maxConnections: 1 }, { closeTimeoutMs: 10_000 });
+    // Rejected (4001) sockets that never answer the close stay counted until closeTimeout.
+    const held = await Promise.all(
+      Array.from({ length: 1 + UPGRADE_HEADROOM }, () => rawUpgrade(port, '/ws?v=2')),
+    );
+    expect(await handshake(port, '/ws?v=1')).toBe(503);
+    expect(logs).toContainEqual(expect.stringMatching(/^reject status=503 reason=flood /));
+    for (const { socket } of held) socket.destroy();
+  });
 });
 
 describe('HTTP endpoints', () => {
-  it('reports health with the version, uptime, connections and rate', async () => {
-    const { port, url } = await start({ gitSha: 'abc1234' });
+  it('reports health with the version, uptime, connections, rate, memory and latencies', async () => {
+    const { port, url, server } = await start({ gitSha: 'abc1234' });
     const client = new TestClient(`${url}?v=1&rate=1000`);
     await client.next('hello');
     await until(async () => {
@@ -461,13 +562,35 @@ describe('HTTP endpoints', () => {
     const { status, type, body } = await get(port, '/healthz');
     expect(status).toBe(200);
     expect(type).toBe('application/json');
-    expect(JSON.parse(body)).toEqual({
+    const latency = {
+      p50: expect.any(Number) as unknown,
+      p99: expect.any(Number) as unknown,
+      max: expect.any(Number) as unknown,
+    };
+    const health: unknown = JSON.parse(body);
+    expect(health).toEqual({
       status: 'ok',
       version: 'abc1234',
       uptimeS: expect.any(Number) as unknown,
       connections: 1,
       eventsPerSec: expect.any(Number) as unknown,
+      rssMb: expect.any(Number) as unknown,
+      eventLoopDelayMs: latency,
+      tickMs: latency,
     });
+    expect(server.health().tickMs.max).toBeGreaterThan(0);
+    expect(server.health().rssMb).toBeGreaterThan(10);
+    server.resetStats();
+    expect(server.health().tickMs).toEqual({ p50: 0, p99: 0, max: 0 });
+  });
+
+  it('reports latencies of the last complete stats window', async () => {
+    const { server, url } = await start({}, { statsWindowMs: 300 });
+    const client = new TestClient(`${url}?v=1&rate=1000`);
+    await client.next('hello');
+    await sleep(700);
+    // A full window has passed: the numbers come from it, not from the window just started.
+    expect(server.health().tickMs.max).toBeGreaterThan(0);
   });
 
   it('serves a short text on / and explains /ws to plain HTTP clients', async () => {

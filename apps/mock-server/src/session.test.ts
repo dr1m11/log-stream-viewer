@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 
 import {
   BATCH_INTERVAL_MS,
+  CLIENT_MESSAGE_BURST,
   CLOSE_CODES,
   MIN_RATE,
   parseServerMessage,
@@ -13,11 +14,16 @@ import { describe, expect, it } from 'vitest';
 
 import { TRAFFIC_SPIKE } from './generator/scenarios.ts';
 import {
-  BACKPRESSURE_BYTES,
   clampRate,
+  EVENT_BYTES_ESTIMATE,
+  hardBufferLimit,
+  MAX_BUFFERED_BYTES,
+  MAX_SOFT_BUFFER_BYTES,
+  MIN_SOFT_BUFFER_BYTES,
   PING_INTERVAL_MS,
   Session,
   type SessionSocket,
+  softBufferLimit,
 } from './session.ts';
 
 const fixture = (name: string): string =>
@@ -34,11 +40,16 @@ class FakeSocket implements SessionSocket {
   terminated = false;
   /** Answers pings like a live client; `undefined` simulates a dead one. */
   onPing: (() => void) | undefined;
+  /** Simulates a client that never reads: every send stays in the buffer. */
+  growOnSend = false;
+  /** Extra bytes every send adds to the buffer. */
+  extraOnSend = 0;
 
   send(data: string): void {
     const parsed = parseServerMessage(data);
     if (!parsed.ok) throw new Error(`Invalid server message: ${parsed.error.message}`);
     this.messages.push(parsed.value);
+    this.bufferedAmount += (this.growOnSend ? data.length : 0) + this.extraOnSend;
   }
 
   ping(): void {
@@ -165,17 +176,31 @@ describe('Session', () => {
     expect(socket.ofType('batch').some((batch) => batch.dropped !== undefined)).toBe(false);
   });
 
-  it('skips events under backpressure and reports them as dropped', () => {
+  it('derives the soft threshold from about one second of the stream', () => {
+    expect(softBufferLimit(10)).toBe(MIN_SOFT_BUFFER_BYTES);
+    expect(softBufferLimit(1000)).toBe(1000 * EVENT_BYTES_ESTIMATE);
+    expect(softBufferLimit(20_000)).toBe(MAX_SOFT_BUFFER_BYTES);
+    expect(hardBufferLimit(20_000)).toBe(MAX_BUFFERED_BYTES);
+    expect(hardBufferLimit(100_000)).toBeGreaterThan(
+      MAX_SOFT_BUFFER_BYTES + 2 * 5000 * EVENT_BYTES_ESTIMATE - 1,
+    );
+  });
+
+  it('skips events under backpressure, with hysteresis, and reports them as dropped', () => {
     const { socket, session } = open();
+    const soft = softBufferLimit(200);
     run(session, T0, T0 + 500);
-    socket.bufferedAmount = BACKPRESSURE_BYTES + 1;
-    run(session, T0 + 500, T0 + 1000);
+    socket.bufferedAmount = soft + 1;
+    run(session, T0 + 500, T0 + 750);
+    // Still above half of the threshold: the session keeps skipping.
+    socket.bufferedAmount = Math.ceil(soft * 0.75);
+    run(session, T0 + 750, T0 + 1000);
     expect(socket.ofType('batch')).toHaveLength(10);
     expect(socket.ofType('heartbeat')).toEqual([
       { type: 'heartbeat', serverTime: T0 + 1000, lastSeq: 200 },
     ]);
 
-    socket.bufferedAmount = 0;
+    socket.bufferedAmount = Math.floor(soft / 2) - 1;
     run(session, T0 + 1000, T0 + 1050);
     const last = socket.ofType('batch').at(-1);
     expect(last?.dropped).toBe(100);
@@ -185,6 +210,88 @@ describe('Session', () => {
 
     run(session, T0 + 1050, T0 + 1100);
     expect(socket.ofType('batch').at(-1)?.dropped).toBeUndefined();
+  });
+
+  it('drops only what the budget would have granted', () => {
+    const { socket, session } = open();
+    socket.bufferedAmount = softBufferLimit(200) + 1;
+    run(session, T0, T0 + 1000, (due) => Math.min(due, 3));
+    expect(session.droppedEvents).toBe(60);
+    socket.bufferedAmount = 0;
+    run(session, T0 + 1000, T0 + 1050, (due) => Math.min(due, 3));
+    expect(socket.ofType('batch').at(-1)?.dropped).toBe(60);
+  });
+
+  it('leaves client frames unanswered while the send buffer is backed up', () => {
+    const { socket, session } = open();
+    const sent = socket.messages.length;
+    socket.bufferedAmount = softBufferLimit(200) + 1;
+    session.receive(fixture('configure.json'), T0 + 10);
+    session.receive('not json', T0 + 20);
+    session.receiveBinary(T0 + 30);
+    expect(socket.messages).toHaveLength(sent);
+    expect(session.ignoredFrames).toBe(3);
+    expect(socket.closes).toEqual([]);
+  });
+
+  it('keeps memory bounded when a client floods within the rate limit but never reads', () => {
+    const { socket, session } = open();
+    socket.growOnSend = true;
+    for (let now = T0; now < T0 + 120_000; now += 50) session.receive('{"type":"subscribe"}', now);
+    expect(socket.closes).toEqual([]);
+    expect(socket.terminated).toBe(false);
+    expect(socket.bufferedAmount).toBeLessThan(softBufferLimit(200) + 1024);
+    expect(session.ignoredFrames).toBeGreaterThan(1000);
+  });
+
+  it('terminates the socket when its buffer passes the hard cap in a tick', () => {
+    const { socket, session } = open();
+    socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
+    expect(session.due(T0 + 50)).toBe(0);
+    expect(socket.terminated).toBe(true);
+    expect(session.endReason).toBe('buffer-overflow');
+    expect(session.flush(T0 + 50, 10)).toBe(0);
+  });
+
+  it('terminates the socket when a send pushes the buffer past the hard cap', () => {
+    const { socket, session } = open();
+    socket.extraOnSend = MAX_BUFFERED_BYTES + 1;
+    session.flush(T0 + 1000, session.due(T0 + 1000));
+    expect(socket.terminated).toBe(true);
+    expect(session.endReason).toBe('buffer-overflow');
+    // The heartbeat due in the same tick was not sent after the termination.
+    expect(socket.ofType('heartbeat')).toEqual([]);
+  });
+
+  it('closes with 1008 when a client floods it with messages', () => {
+    const { socket, session } = open();
+    for (let index = 0; index < CLIENT_MESSAGE_BURST; index++) session.receive('{}', T0);
+    expect(socket.ofType('error')).toHaveLength(CLIENT_MESSAGE_BURST);
+    expect(socket.closes).toEqual([]);
+    session.receive('{}', T0);
+    expect(socket.closes).toEqual([
+      { code: CLOSE_CODES.policyViolation, reason: 'too many messages' },
+    ]);
+    expect(session.endReason).toBe('message-rate');
+    expect(socket.ofType('error')).toHaveLength(CLIENT_MESSAGE_BURST);
+  });
+
+  it('never exceeds MAX_RATE, even during a traffic spike', () => {
+    const socket = new FakeSocket();
+    const session = new Session({
+      socket,
+      streamId: 'st_capped',
+      settings: { rate: 1000, scenario: 'traffic-spike', seed: 1 },
+      limits: { ...LIMITS, maxRate: 1000 },
+      now: T0,
+    });
+    socket.onPing = () => {
+      session.pong();
+    };
+    const spikeStart = T0 + TRAFFIC_SPIKE.startMs;
+    run(session, T0, spikeStart);
+    run(session, spikeStart, spikeStart + 1000);
+    expect(socket.events().length - 5000).toBe(1000);
   });
 
   it('answers configure with the clamped settings (golden fixtures)', () => {
@@ -270,7 +377,7 @@ describe('Session', () => {
 
   it('treats a binary frame like a malformed message', () => {
     const { socket, session } = open();
-    session.receiveBinary();
+    session.receiveBinary(T0);
     expect(socket.messages.at(-1)).toMatchObject({ type: 'error', code: 'bad-message' });
     expect(socket.closes).toEqual([]);
   });
@@ -306,7 +413,7 @@ describe('Session', () => {
     const sent = socket.messages.length;
     expect(session.flush(T0 + LIMITS.sessionMaxMs, 10)).toBe(0);
     session.receive(fixture('configure.json'), T0 + LIMITS.sessionMaxMs);
-    session.receiveBinary();
+    session.receiveBinary(T0);
     expect(socket.messages).toHaveLength(sent);
   });
 

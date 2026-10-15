@@ -8,23 +8,29 @@ export interface Stream {
   flush(now: number, granted: number): number;
 }
 
+/** Called once for a stream that threw during a tick; the hub has already dropped it. */
+export type StreamErrorHandler<S> = (stream: S, error: unknown) => void;
+
 /** Window over which `/healthz` measures the event rate. */
 const RATE_WINDOW_MS = 1000;
 
 /**
  * Drives all open streams from one clock tick: asks each for its due events, splits the global
- * budget fairly among them and lets each flush its share. Pure: the server owns the timer.
+ * budget fairly among them and lets each flush its share. A stream that throws is removed and
+ * reported once, so one broken session cannot stop the others. Pure: the server owns the timer.
  */
 export class StreamHub<S extends Stream = Stream> {
   readonly #streams = new Set<S>();
   readonly #budget: EventBudget;
+  readonly #onError: StreamErrorHandler<S>;
   #windowStart: number;
   #windowEvents = 0;
   #eventsPerSec = 0;
 
-  constructor(globalMaxEventsPerSec: number, now: number) {
+  constructor(globalMaxEventsPerSec: number, now: number, onError: StreamErrorHandler<S>) {
     this.#budget = new EventBudget(globalMaxEventsPerSec, now);
     this.#windowStart = now;
+    this.#onError = onError;
   }
 
   get size(): number {
@@ -47,11 +53,13 @@ export class StreamHub<S extends Stream = Stream> {
   /** One tick: every stream gets its fair share of the budget. Returns the events sent. */
   tick(now: number): number {
     const streams = this.streams();
-    const demands = streams.map((stream) => stream.due(now));
+    const demands = streams.map((stream) => this.#guard(stream, 0, () => stream.due(now)));
     const grants = this.#budget.allocate(demands, now);
     let sent = 0;
     streams.forEach((stream, index) => {
-      sent += stream.flush(now, grants[index] ?? 0);
+      if (!this.#streams.has(stream)) return;
+      const granted = grants[index] ?? 0;
+      sent += this.#guard(stream, 0, () => stream.flush(now, granted));
     });
     this.#measure(now, sent);
     return sent;
@@ -60,6 +68,16 @@ export class StreamHub<S extends Stream = Stream> {
   /** Events sent per second over the last complete window; 0 when no tick ran lately. */
   eventsPerSec(now: number): number {
     return now - this.#windowStart > 2 * RATE_WINDOW_MS ? 0 : this.#eventsPerSec;
+  }
+
+  #guard(stream: S, fallback: number, run: () => number): number {
+    try {
+      return run();
+    } catch (error) {
+      this.#streams.delete(stream);
+      this.#onError(stream, error);
+      return fallback;
+    }
   }
 
   #measure(now: number, sent: number): void {

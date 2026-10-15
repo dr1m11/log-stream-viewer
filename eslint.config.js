@@ -74,7 +74,7 @@ const SERVER_IMPORT_BANS = [
   ...otherAppImports('web'),
 ];
 const PURE_SERVER_MESSAGE =
-  'The generator, scheduler, budget and hub are pure: no Node APIs, sockets, wall clock or Math.random — take time as an argument and randomness from the seeded Prng (see .claude/rules/mock-server.md).';
+  'The generator, scheduler, budget, hub, rate limiter and client-ip helpers are pure: no Node APIs, sockets, wall clock or Math.random — take time as an argument and randomness from the seeded Prng (see .claude/rules/mock-server.md).';
 /** @type {ImportPattern[]} */
 const PURE_SERVER_IMPORT_BANS = [
   { regex: NODE_BUILTINS_RE, message: PURE_SERVER_MESSAGE },
@@ -172,7 +172,7 @@ export default defineConfig(
     // Deterministic core of the server: a seed and a fake clock must reproduce a stream exactly.
     files: [
       'apps/mock-server/src/generator/**/*.ts',
-      'apps/mock-server/src/{scheduler,budget,hub}.ts',
+      'apps/mock-server/src/{scheduler,budget,hub,rate-limit,client-ip}.ts',
     ],
     rules: {
       'no-restricted-imports': restrictImports(SERVER_IMPORT_BANS, PURE_SERVER_IMPORT_BANS),
