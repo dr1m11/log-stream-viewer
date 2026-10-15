@@ -5,6 +5,9 @@
  * and the client's JSON parsing cannot throttle the server.
  *
  *   pnpm --filter @lsv/mock-server bench:deflate [seconds=8] [rounds=3] [modes=1x20000,10x2000,50x400,50x10]
+ *   pnpm --filter @lsv/mock-server bench:deflate stuck [sessions=50] [rate=20000] [seconds=30]
+ *
+ * The `stuck` mode connects clients that never read and samples the server's memory after GC.
  *
  * Reports achieved events/s, server CPU, RSS (idle, end and peak), tick p99, event-loop delay p99
  * and bytes per event on the wire. Results are recorded in docs/adr/0005.
@@ -89,10 +92,10 @@ const mb = (bytes: number) => Math.round((bytes / 1024 / 1024) * 10) / 10;
 
 // --- Server process -------------------------------------------------------------------------------
 
-async function serve(variant: Variant): Promise<void> {
+async function serve(variant: Variant, globalMaxEventsPerSec = 200_000): Promise<void> {
   const config = parseConfig({
     MAX_RATE: '20000',
-    GLOBAL_MAX_EVENTS_PER_SEC: '200000',
+    GLOBAL_MAX_EVENTS_PER_SEC: String(globalMaxEventsPerSec),
     MAX_CONNECTIONS: '200',
     MAX_CONNECTIONS_PER_IP: '200',
   });
@@ -110,6 +113,17 @@ async function serve(variant: Variant): Promise<void> {
     peakRss = Math.max(peakRss, process.memoryUsage.rss());
   }, 100);
   onCommand({
+    memory: () => {
+      globalThis.gc?.();
+      const usage = process.memoryUsage();
+      send({
+        type: 'memory',
+        rss: usage.rss,
+        heapUsed: usage.heapUsed,
+        arrayBuffers: usage.arrayBuffers,
+        connections: server.health().connections,
+      });
+    },
     start: () => {
       cpu = process.cpuUsage();
       wall = performance.now();
@@ -187,6 +201,63 @@ async function client(port: number, sessions: number, rate: number): Promise<voi
     },
   });
   send({ type: 'connected' });
+}
+
+/** Clients that connect and then never read (their sockets are paused). */
+async function stuckClient(port: number, sessions: number, rate: number): Promise<void> {
+  const connections = Array.from(
+    { length: sessions },
+    (_, index) =>
+      new WebSocket(
+        `ws://127.0.0.1:${String(port)}/ws?v=1&rate=${String(rate)}&seed=${String(index + 1)}`,
+      ),
+  );
+  for (const ws of connections) ws.on('error', () => undefined);
+  await Promise.all(connections.map((ws) => once(ws, 'open')));
+  for (const ws of connections) ws.pause();
+  onCommand({
+    stop: () => {
+      for (const ws of connections) ws.terminate();
+      process.exit(0);
+    },
+  });
+  send({ type: 'connected' });
+}
+
+/** Server memory while `sessions` clients at `rate` stop reading, sampled every 5 s. */
+async function stuck(sessions: number, rate: number, seconds: number): Promise<void> {
+  console.log(
+    `Node ${process.version}, ${process.platform}/${process.arch}: ${String(sessions)} clients at ` +
+      `${String(rate)} events/s that never read, ${String(seconds)} s, memory after GC`,
+  );
+  // The production default global budget (20,000 events/s), unlike the load runs.
+  const server = fork(SELF, ['serve', 'default', '20000'], {
+    stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+    execArgv: ['--expose-gc'],
+  });
+  const port = numberField(await nextMessage(server, 'listening'), 'port');
+  const clients = fork(SELF, ['stuck-client', String(port), String(sessions), String(rate)], {
+    stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+  });
+  await nextMessage(clients, 'connected');
+  const rows = [];
+  for (let elapsed = 0; elapsed <= seconds; elapsed += 5) {
+    const memory = nextMessage(server, 'memory');
+    server.send({ type: 'memory' });
+    const m = await memory;
+    rows.push({
+      s: elapsed,
+      'open sessions': numberField(m, 'connections'),
+      'RSS MB': mb(numberField(m, 'rss')),
+      'heap MB': mb(numberField(m, 'heapUsed')),
+      'ArrayBuffers MB': mb(numberField(m, 'arrayBuffers')),
+    });
+    if (elapsed < seconds) await sleep(5000);
+  }
+  console.table(rows);
+  clients.send({ type: 'stop' });
+  server.send({ type: 'stop' });
+  await Promise.all([once(server, 'exit'), once(clients, 'exit')]);
 }
 
 // --- Orchestrator ---------------------------------------------------------------------------------
@@ -300,6 +371,10 @@ async function main(): Promise<void> {
 }
 
 const [role, first, second, third] = process.argv.slice(2);
-if (role === 'serve' && isVariant(first)) await serve(first);
+if (role === 'serve' && isVariant(first))
+  await serve(first, second === undefined ? undefined : Number(second));
 else if (role === 'client') await client(Number(first), Number(second), Number(third));
+else if (role === 'stuck-client') await stuckClient(Number(first), Number(second), Number(third));
+else if (role === 'stuck')
+  await stuck(Number(first ?? 50), Number(second ?? 20_000), Number(third ?? 30));
 else await main();
