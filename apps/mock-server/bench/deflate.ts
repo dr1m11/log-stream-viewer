@@ -1,12 +1,13 @@
 /**
- * Measures what permessage-deflate costs and saves: one client streams `rate` events/s for
- * `seconds`, alternately with the production setting (level 1, threshold 1024 bytes) and without
- * compression, for `rounds` rounds. The server runs in a child process so that its CPU time
- * (all threads, including zlib's thread pool) excludes the client.
+ * Load benchmark of the mock server: N sessions × rate events/s, with each permessage-deflate
+ * variant, for several rounds. The server and the client each run in their own process, so the
+ * server's CPU time (user + system of all its threads, zlib's pool included) excludes the client,
+ * and the client's JSON parsing cannot throttle the server.
  *
- *   pnpm --filter @lsv/mock-server bench:deflate [rate=10000] [seconds=10] [rounds=3]
+ *   pnpm --filter @lsv/mock-server bench:deflate [seconds=8] [rounds=3] [modes=1x20000,10x2000,50x400,50x10]
  *
- * Results are recorded in docs/adr/0005.
+ * Reports achieved events/s, server CPU, RSS (idle, end and peak), tick p99, event-loop delay p99
+ * and bytes per event on the wire. Results are recorded in docs/adr/0005.
  */
 import { type ChildProcess, fork } from 'node:child_process';
 import { once } from 'node:events';
@@ -15,71 +16,128 @@ import process from 'node:process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
+import type { PerMessageDeflateOptions } from 'ws';
 import { type RawData, WebSocket } from 'ws';
 
 import { parseConfig } from '../src/config.ts';
-import { createServer } from '../src/server.ts';
+import { createServer, DEFLATE_OPTIONS } from '../src/server.ts';
 
 const WARM_UP_MS = 2000;
+const SELF = fileURLToPath(import.meta.url);
 
-interface Measurement {
-  readonly deflate: boolean;
-  readonly extensions: string;
-  readonly eventsPerSec: number;
-  readonly wireBytesPerSec: number;
-  readonly jsonBytesPerSec: number;
-  readonly serverCpuPercent: number;
+/** permessage-deflate variants under test. */
+const VARIANTS = {
+  default: DEFLATE_OPTIONS,
+  // Smaller zlib state per connection: 8 KiB window (negotiated as server_max_window_bits) and
+  // memLevel 7; the client resets its context per message, so the server's inflater stays small.
+  compact: {
+    zlibDeflateOptions: { level: 1, memLevel: 7 },
+    serverMaxWindowBits: 13,
+    clientNoContextTakeover: true,
+  },
+  off: false,
+} as const satisfies Record<string, PerMessageDeflateOptions | false>;
+
+type Variant = keyof typeof VARIANTS;
+
+function isVariant(value: string | undefined): value is Variant {
+  return value !== undefined && value in VARIANTS;
 }
 
-function field(message: unknown, type: string, key: string): number | undefined {
-  if (typeof message !== 'object' || message === null) return undefined;
-  if (!('type' in message) || message.type !== type || !(key in message)) return undefined;
-  const value: unknown = Reflect.get(message, key);
-  return typeof value === 'number' ? value : undefined;
+// --- IPC ------------------------------------------------------------------------------------------
+
+type Message = Readonly<Record<string, unknown>> & { readonly type: string };
+
+function isMessage(value: unknown): value is Message {
+  return (
+    typeof value === 'object' && value !== null && 'type' in value && typeof value.type === 'string'
+  );
 }
 
-function nextMessage(child: ChildProcess, type: string, key: string): Promise<number> {
+function send(message: Message): void {
+  process.send?.(message);
+}
+
+function nextMessage(child: ChildProcess, type: string): Promise<Message> {
   return new Promise((resolve, reject) => {
     const onMessage = (message: unknown) => {
-      const value = field(message, type, key);
-      if (value === undefined) return;
+      if (!isMessage(message) || message.type !== type) return;
       child.off('message', onMessage);
-      resolve(value);
+      child.off('exit', onExit);
+      resolve(message);
+    };
+    const onExit = (code: number | null) => {
+      reject(new Error(`Child exited with ${String(code)} while waiting for "${type}"`));
     };
     child.on('message', onMessage);
-    child.once('exit', (code) => {
-      reject(new Error(`Server process exited with ${String(code)}`));
-    });
+    child.once('exit', onExit);
   });
 }
 
-/** Child process: a server with or without deflate that reports its own CPU time. */
-async function serve(deflate: boolean): Promise<void> {
-  const config = parseConfig({ MAX_RATE: '100000', GLOBAL_MAX_EVENTS_PER_SEC: '100000' });
+function numberField(message: Message, key: string): number {
+  const value = message[key];
+  return typeof value === 'number' ? value : Number.NaN;
+}
+
+function onCommand(handlers: Readonly<Record<string, () => void>>): void {
+  process.on('message', (message: unknown) => {
+    if (isMessage(message)) handlers[message.type]?.();
+  });
+}
+
+const mb = (bytes: number) => Math.round((bytes / 1024 / 1024) * 10) / 10;
+
+// --- Server process -------------------------------------------------------------------------------
+
+async function serve(variant: Variant): Promise<void> {
+  const config = parseConfig({
+    MAX_RATE: '20000',
+    GLOBAL_MAX_EVENTS_PER_SEC: '200000',
+    MAX_CONNECTIONS: '200',
+    MAX_CONNECTIONS_PER_IP: '200',
+  });
   if (!config.ok) throw new Error(config.error.join('; '));
   const server = createServer(
     { ...config.value, port: 0, host: '127.0.0.1' },
-    { deflate, log: () => undefined },
+    { perMessageDeflate: VARIANTS[variant], log: () => undefined, statsWindowMs: 1e9 },
   );
   const { port } = await server.listen();
+  const idleRss = process.memoryUsage.rss();
   let cpu = process.cpuUsage();
   let wall = performance.now();
-  process.on('message', (message: unknown) => {
-    if (field(message, 'start', 'at') !== undefined) {
+  let peakRss = 0;
+  const sampler = setInterval(() => {
+    peakRss = Math.max(peakRss, process.memoryUsage.rss());
+  }, 100);
+  onCommand({
+    start: () => {
       cpu = process.cpuUsage();
       wall = performance.now();
-    } else if (field(message, 'stop', 'at') !== undefined) {
+      peakRss = process.memoryUsage.rss();
+      server.resetStats();
+    },
+    stop: () => {
       const used = process.cpuUsage(cpu);
-      process.send?.({
-        type: 'cpu',
+      const health = server.health();
+      clearInterval(sampler);
+      send({
+        type: 'result',
         cpuMs: (used.user + used.system) / 1000,
         wallMs: performance.now() - wall,
+        idleRss,
+        endRss: process.memoryUsage.rss(),
+        peakRss: Math.max(peakRss, process.memoryUsage.rss()),
+        tickP99: health.tickMs.p99,
+        tickP50: health.tickMs.p50,
+        loopP99: health.eventLoopDelayMs.p99,
       });
       void server.close().then(() => process.exit(0));
-    }
+    },
   });
-  process.send?.({ type: 'listening', port });
+  send({ type: 'listening', port });
 }
+
+// --- Client process -------------------------------------------------------------------------------
 
 function textOf(data: RawData): string {
   if (Array.isArray(data)) return Buffer.concat(data).toString('utf8');
@@ -87,87 +145,161 @@ function textOf(data: RawData): string {
   return data.toString('utf8');
 }
 
-async function measure(deflate: boolean, rate: number, seconds: number): Promise<Measurement> {
-  const child = fork(fileURLToPath(import.meta.url), ['serve', deflate ? 'on' : 'off'], {
-    stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
-  });
-  const port = await nextMessage(child, 'listening', 'port');
-  const ws = new WebSocket(`ws://127.0.0.1:${String(port)}/ws?v=1&rate=${String(rate)}&seed=42`);
-  let socket: Socket | undefined;
-  ws.on('upgrade', (response) => {
-    socket = response.socket;
-  });
+async function client(port: number, sessions: number, rate: number): Promise<void> {
   let events = 0;
   let jsonBytes = 0;
-  ws.on('message', (data) => {
-    const text = textOf(data);
-    jsonBytes += Buffer.byteLength(text);
-    const message: unknown = JSON.parse(text);
-    if (typeof message === 'object' && message !== null && 'events' in message) {
-      events += Array.isArray(message.events) ? message.events.length : 0;
-    }
+  const sockets: Socket[] = [];
+  const connections = Array.from({ length: sessions }, (_, index) => {
+    const ws = new WebSocket(
+      `ws://127.0.0.1:${String(port)}/ws?v=1&rate=${String(rate)}&seed=${String(index + 1)}`,
+    );
+    ws.on('upgrade', (response) => {
+      sockets.push(response.socket);
+    });
+    ws.on('message', (data) => {
+      const text = textOf(data);
+      jsonBytes += Buffer.byteLength(text);
+      const message: unknown = JSON.parse(text);
+      if (typeof message === 'object' && message !== null && 'events' in message) {
+        events += Array.isArray(message.events) ? message.events.length : 0;
+      }
+    });
+    return ws;
   });
-  await once(ws, 'open');
+  await Promise.all(connections.map((ws) => once(ws, 'open')));
+  const wire = () => sockets.reduce((sum, socket) => sum + socket.bytesRead, 0);
+  let before = { events, jsonBytes, wire: wire(), at: performance.now() };
+  onCommand({
+    start: () => {
+      before = { events, jsonBytes, wire: wire(), at: performance.now() };
+    },
+    stop: () => {
+      const seconds = (performance.now() - before.at) / 1000;
+      send({
+        type: 'result',
+        eventsPerSec: (events - before.events) / seconds,
+        jsonBytesPerSec: (jsonBytes - before.jsonBytes) / seconds,
+        wireBytesPerSec: (wire() - before.wire) / seconds,
+        extensions: connections[0]?.extensions ?? '',
+      });
+      for (const ws of connections) ws.terminate();
+      process.exit(0);
+    },
+  });
+  send({ type: 'connected' });
+}
+
+// --- Orchestrator ---------------------------------------------------------------------------------
+
+interface Mode {
+  readonly sessions: number;
+  readonly rate: number;
+}
+
+interface Run {
+  readonly mode: string;
+  readonly variant: Variant;
+  readonly eventsPerSec: number;
+  readonly cpuPercent: number;
+  readonly idleRssMb: number;
+  readonly endRssMb: number;
+  readonly peakRssMb: number;
+  readonly tickP50: number;
+  readonly tickP99: number;
+  readonly loopP99: number;
+  readonly wireBytesPerEvent: number;
+  readonly jsonBytesPerEvent: number;
+}
+
+async function measure(mode: Mode, variant: Variant, seconds: number): Promise<Run> {
+  const server = fork(SELF, ['serve', variant], { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
+  const port = numberField(await nextMessage(server, 'listening'), 'port');
+  const clients = fork(SELF, ['client', String(port), String(mode.sessions), String(mode.rate)], {
+    stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+  });
+  await nextMessage(clients, 'connected');
   await sleep(WARM_UP_MS);
-
-  const before = { events, jsonBytes, wire: socket?.bytesRead ?? 0 };
-  child.send({ type: 'start', at: Date.now() });
+  server.send({ type: 'start' });
+  clients.send({ type: 'start' });
   await sleep(seconds * 1000);
-  const after = { events, jsonBytes, wire: socket?.bytesRead ?? 0 };
-  const cpu = nextMessage(child, 'cpu', 'cpuMs');
-  const wall = nextMessage(child, 'cpu', 'wallMs');
-  child.send({ type: 'stop', at: Date.now() });
-  const [cpuMs, wallMs] = await Promise.all([cpu, wall]);
-  const extensions = ws.extensions;
-  ws.terminate();
-  await once(child, 'exit');
-
+  const serverResult = nextMessage(server, 'result');
+  const clientResult = nextMessage(clients, 'result');
+  clients.send({ type: 'stop' });
+  server.send({ type: 'stop' });
+  const [s, c] = await Promise.all([serverResult, clientResult]);
+  await Promise.all([once(server, 'exit'), once(clients, 'exit')]);
+  const eventsPerSec = numberField(c, 'eventsPerSec');
   return {
-    deflate,
-    extensions: extensions === '' ? 'none' : extensions,
-    eventsPerSec: Math.round((after.events - before.events) / seconds),
-    wireBytesPerSec: Math.round((after.wire - before.wire) / seconds),
-    jsonBytesPerSec: Math.round((after.jsonBytes - before.jsonBytes) / seconds),
-    serverCpuPercent: Math.round((cpuMs / wallMs) * 1000) / 10,
+    mode: `${String(mode.sessions)}×${String(mode.rate)}`,
+    variant,
+    eventsPerSec: Math.round(eventsPerSec),
+    cpuPercent: Math.round((numberField(s, 'cpuMs') / numberField(s, 'wallMs')) * 1000) / 10,
+    idleRssMb: mb(numberField(s, 'idleRss')),
+    endRssMb: mb(numberField(s, 'endRss')),
+    peakRssMb: mb(numberField(s, 'peakRss')),
+    tickP50: numberField(s, 'tickP50'),
+    tickP99: numberField(s, 'tickP99'),
+    loopP99: numberField(s, 'loopP99'),
+    wireBytesPerEvent: Math.round(numberField(c, 'wireBytesPerSec') / Math.max(1, eventsPerSec)),
+    jsonBytesPerEvent: Math.round(numberField(c, 'jsonBytesPerSec') / Math.max(1, eventsPerSec)),
   };
 }
 
-async function main(): Promise<void> {
-  const rate = Number(process.argv[2] ?? 10_000);
-  const seconds = Number(process.argv[3] ?? 10);
-  const rounds = Number(process.argv[4] ?? 3);
-  console.log(
-    `Node ${process.version}, ${process.platform}/${process.arch}: ${String(rate)} events/s, ` +
-      `${String(seconds)} s per run, ${String(rounds)} rounds (modes alternate)`,
-  );
-  const runs: Measurement[] = [];
-  for (let round = 0; round < rounds; round++) {
-    runs.push(await measure(true, rate, seconds), await measure(false, rate, seconds));
-  }
-  const row = (result: Measurement) => ({
-    deflate: result.deflate ? 'level 1' : 'off',
-    'events/s': result.eventsPerSec,
-    'server CPU %': result.serverCpuPercent,
-    'wire KB/s': Math.round(result.wireBytesPerSec / 1024),
-    'JSON KB/s': Math.round(result.jsonBytesPerSec / 1024),
-    'wire B/event': Math.round(result.wireBytesPerSec / Math.max(1, result.eventsPerSec)),
-    'JSON B/event': Math.round(result.jsonBytesPerSec / Math.max(1, result.eventsPerSec)),
-    negotiated: result.extensions,
+function median(values: readonly number[]): number {
+  const sorted = values.toSorted((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)] ?? Number.NaN;
+}
+
+function parseModes(text: string): Mode[] {
+  return text.split(',').map((entry) => {
+    const [sessions = '1', rate = '1000'] = entry.split('x');
+    return { sessions: Number(sessions), rate: Number(rate) };
   });
-  console.table(runs.map(row));
-  const median = (values: number[]) => values.sort((a, b) => a - b)[Math.floor(values.length / 2)];
-  console.table(
-    [true, false].map((deflate) => {
-      const cpu = runs.filter((run) => run.deflate === deflate).map((run) => run.serverCpuPercent);
+}
+
+async function main(): Promise<void> {
+  const seconds = Number(process.argv[2] ?? 8);
+  const rounds = Number(process.argv[3] ?? 3);
+  const modes = parseModes(process.argv[4] ?? '1x20000,10x2000,50x400,50x10');
+  const variants = Object.keys(VARIANTS).filter(isVariant);
+  console.log(
+    `Node ${process.version}, ${process.platform}/${process.arch}: ${String(seconds)} s per run ` +
+      `after ${String(WARM_UP_MS / 1000)} s warm-up, ${String(rounds)} rounds, variants ${variants.join('/')}`,
+  );
+  const runs: Run[] = [];
+  for (let round = 0; round < rounds; round++) {
+    for (const mode of modes) {
+      for (const variant of variants) {
+        const run = await measure(mode, variant, seconds);
+        runs.push(run);
+        console.log(JSON.stringify({ round: round + 1, ...run }));
+      }
+    }
+  }
+  const summary = modes.flatMap((mode) =>
+    variants.map((variant) => {
+      const label = `${String(mode.sessions)}×${String(mode.rate)}`;
+      const own = runs.filter((run) => run.mode === label && run.variant === variant);
+      const pick = (key: keyof Omit<Run, 'mode' | 'variant'>) => median(own.map((run) => run[key]));
       return {
-        deflate: deflate ? 'level 1' : 'off',
-        'median server CPU %': median([...cpu]),
-        'min %': Math.min(...cpu),
-        'max %': Math.max(...cpu),
+        mode: label,
+        deflate: variant,
+        'events/s': pick('eventsPerSec'),
+        'CPU %': pick('cpuPercent'),
+        'CPU % min–max': `${String(Math.min(...own.map((run) => run.cpuPercent)))}–${String(Math.max(...own.map((run) => run.cpuPercent)))}`,
+        'RSS idle/end/peak MB': `${String(pick('idleRssMb'))}/${String(pick('endRssMb'))}/${String(pick('peakRssMb'))}`,
+        'tick p50/p99 ms': `${String(pick('tickP50'))}/${String(pick('tickP99'))}`,
+        'loop p99 ms': pick('loopP99'),
+        'wire B/event': pick('wireBytesPerEvent'),
+        'JSON B/event': pick('jsonBytesPerEvent'),
       };
     }),
   );
+  console.log('\nMedians over rounds:');
+  console.table(summary);
 }
 
-if (process.argv[2] === 'serve') await serve(process.argv[3] === 'on');
+const [role, first, second, third] = process.argv.slice(2);
+if (role === 'serve' && isVariant(first)) await serve(first);
+else if (role === 'client') await client(Number(first), Number(second), Number(third));
 else await main();
