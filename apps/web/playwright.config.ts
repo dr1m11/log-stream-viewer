@@ -20,9 +20,10 @@ export default defineConfig({
     trace: 'on-first-retry',
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
-  // E2E runs against the production build (`pnpm build` first; the default VITE_STREAM_URL points
-  // at the local mock server) — the same artifact that gets deployed. Neither server is reused, so
-  // a leftover dev server fails fast instead of serving stale code: run `pnpm ports:free` first.
+  // E2E runs against a production bundle built for the local mock server (`pnpm build:local`, or
+  // `pnpm build` with VITE_STREAM_URL=ws://localhost:8787/ws as in CI). The mock server therefore
+  // always listens on 8787. Neither server is reused, so a leftover dev server fails fast instead
+  // of serving stale code: run `pnpm ports:free` first.
   webServer: [
     {
       name: 'mock-server',
@@ -30,8 +31,12 @@ export default defineConfig({
       url: 'http://127.0.0.1:8787/healthz',
       reuseExistingServer: false,
       timeout: 30_000,
-      // Parallel workers connect from the same IP; the default limit of 3 per IP is for production.
-      env: { MAX_CONNECTIONS_PER_IP: '50' },
+      env: {
+        // The preview origin on whatever PREVIEW_PORT is in use (the default list has 4173 only).
+        ALLOWED_ORIGINS: `http://localhost:${previewPort},http://127.0.0.1:${previewPort}`,
+        // Parallel workers connect from the same IP; the default limit of 3 per IP is for production.
+        MAX_CONNECTIONS_PER_IP: '50',
+      },
       gracefulShutdown: { signal: 'SIGTERM', timeout: 5000 },
     },
     {
