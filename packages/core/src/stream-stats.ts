@@ -30,8 +30,8 @@ export interface StreamStats {
   /** Starts over with zero counters, e.g. when a new connection opens. */
   readonly reset: (now: number) => void;
   /**
-   * A stream started (`hello`): `seq` restarts at 1, and events per second are measured from
-   * `now` while the stream is younger than the rate window. Counters keep their values.
+   * A stream started (`hello`): `seq` restarts at 1, and the rate window restarts at `now` (events
+   * per second count only this stream's events). The other counters keep their values.
    */
   readonly onHello: (now: number) => void;
   /** A `batch` arrived with `events` and the server's `dropped` count (0 when absent). */
@@ -58,15 +58,23 @@ export function createStreamStats(): StreamStats {
   let lastSeq = 0;
   let startedAt = 0;
 
+  /**
+   * Restarts `seq` tracking and the rate window at `now`. Buckets of a previous connection must
+   * go: divided by a young stream's short window they would inflate the rate several times.
+   */
+  function startStream(now: number): void {
+    lastSeq = 0;
+    startedAt = now;
+    bucketIds.fill(Number.NEGATIVE_INFINITY);
+    bucketCounts.fill(0);
+  }
+
   function reset(now: number): void {
     received = 0;
     missed = 0;
     dropped = 0;
     invalidFrames = 0;
-    lastSeq = 0;
-    startedAt = now;
-    bucketIds.fill(Number.NEGATIVE_INFINITY);
-    bucketCounts.fill(0);
+    startStream(now);
   }
 
   /** Events counted in `slot` if it holds `bucket`, else 0. */
@@ -99,10 +107,7 @@ export function createStreamStats(): StreamStats {
 
   return {
     reset,
-    onHello(now) {
-      lastSeq = 0;
-      startedAt = now;
-    },
+    onHello: startStream,
     onBatch(events, droppedNow, now) {
       dropped += droppedNow;
       const count = events.length;

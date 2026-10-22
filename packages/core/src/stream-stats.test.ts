@@ -82,6 +82,27 @@ describe('createStreamStats', () => {
     expect(stats.counters(T0 + 550)).toMatchObject({ received: 7, missed: 1 });
   });
 
+  it('measures events per second of the new stream only after a reconnect', () => {
+    const stats = setup();
+    let now = T0;
+    // 10,000 events per second for a second: 500 events every 50 ms.
+    for (let tick = 0; tick < 20; tick++) {
+      stats.onBatch(events(seqs(tick * 500 + 1, 500)), 0, now);
+      now += 50;
+    }
+
+    // The connection drops for 200 ms; the new stream runs at the same rate for 100 ms.
+    now += 200;
+    stats.onHello(now);
+    stats.onBatch(events(seqs(1, 500)), 0, now);
+    stats.onBatch(events(seqs(501, 500)), 0, now + 50);
+
+    // The old stream's buckets over the new stream's 100 ms window would read 70,000.
+    const { eventsPerSecond } = stats.counters(now + 100);
+    expect(eventsPerSecond).toBeGreaterThanOrEqual(9000);
+    expect(eventsPerSecond).toBeLessThanOrEqual(11_000);
+  });
+
   it('counts invalid frames', () => {
     const stats = setup();
 
