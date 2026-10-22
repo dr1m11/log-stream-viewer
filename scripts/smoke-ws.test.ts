@@ -188,6 +188,8 @@ interface FakeServerOptions {
   readonly allowedOrigin?: string;
   /** `/healthz` answers 503 this many times before it answers 200. */
   readonly startingRequests?: number;
+  /** `/healthz` stops answering after this many requests. */
+  readonly answeredRequests?: number;
   /** This many connections are closed with 4029 before one streams. */
   readonly busyConnections?: number;
   readonly sendBatch?: boolean;
@@ -197,9 +199,12 @@ interface FakeServerOptions {
 async function startFakeServer(options: FakeServerOptions = {}): Promise<FakeServer> {
   let starting = options.startingRequests ?? 0;
   let busy = options.busyConnections ?? 0;
+  let answered = options.answeredRequests ?? Number.POSITIVE_INFINITY;
   const http = createServer((request, response) => {
     if (request.url !== '/healthz') {
       response.writeHead(404).end();
+    } else if (answered-- <= 0) {
+      // Hang: the client's own timeout ends the request.
     } else if (starting > 0) {
       starting--;
       response.writeHead(503).end('starting');
@@ -305,7 +310,21 @@ describe('runSmoke', () => {
       assert.ok(!result.ok);
       assert.match(
         result.error,
-        /^healthz: version is "old", expected "new" \(gave up after \d+ attempts\)$/,
+        /^healthz: version is "old", expected "new" \(gave up after \d+ attempts(; the last one hit the deadline)?\)$/,
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('reports the previous failure when the deadline cuts the last attempt short', async () => {
+    const server = await startFakeServer({ version: 'old', answeredRequests: 2 });
+    try {
+      const { result } = await smoke(server, ['--expect-version', 'new'], 300);
+      assert.ok(!result.ok);
+      assert.equal(
+        result.error,
+        'healthz: version is "old", expected "new" (gave up after 3 attempts; the last one hit the deadline)',
       );
     } finally {
       await server.close();

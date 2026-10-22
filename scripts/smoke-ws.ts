@@ -55,6 +55,8 @@ export interface SmokeOptions {
 export interface Failure {
   readonly message: string;
   readonly retry: boolean;
+  /** The attempt ran out of its time budget rather than getting an answer. */
+  readonly timedOut?: boolean;
 }
 
 export interface HealthSummary {
@@ -291,7 +293,8 @@ async function fetchHealth(
     // A wrong version is retried too: the old release may still answer for a moment.
     return checked.ok ? checked : err({ message: checked.error, retry: true });
   } catch (error) {
-    return err({ message: describeError(error), retry: true });
+    const timedOut = error instanceof Error && error.name === 'TimeoutError';
+    return err({ message: describeError(error), retry: true, timedOut });
   }
 }
 
@@ -326,7 +329,13 @@ function probeStream(
 
     const timer = setTimeout(() => {
       const waitingFor = probe.hello === undefined ? 'hello' : 'batch';
-      finish(err({ message: `no ${waitingFor} within ${String(timeoutMs)} ms`, retry: true }));
+      finish(
+        err({
+          message: `no ${waitingFor} within ${String(timeoutMs)} ms`,
+          retry: true,
+          timedOut: true,
+        }),
+      );
     }, timeoutMs);
 
     ws.on('unexpected-response', (_request, response) => {
@@ -359,6 +368,7 @@ async function untilDeadline<T>(
   retryDelayMs: number,
   log: (line: string) => void,
 ): Promise<Result<T, string>> {
+  let previous: string | undefined;
   for (let count = 1; ; count++) {
     // Whole milliseconds: AbortSignal.timeout() rejects fractions.
     const timeoutMs = Math.max(
@@ -367,11 +377,18 @@ async function untilDeadline<T>(
     );
     const result = await attempt(timeoutMs);
     if (result.ok) return result;
-    const { message, retry } = result.error;
+    const { message, retry, timedOut } = result.error;
     if (!retry) return err(`${label}: ${message}`);
     if (deadline - performance.now() <= retryDelayMs) {
+      // A last attempt cut short by the deadline only says that time ran out; the one before says why.
+      if (timedOut === true && timeoutMs < ATTEMPT_TIMEOUT_MS && previous !== undefined) {
+        return err(
+          `${label}: ${previous} (gave up after ${String(count)} attempts; the last one hit the deadline)`,
+        );
+      }
       return err(`${label}: ${message} (gave up after ${String(count)} attempts)`);
     }
+    previous = message;
     log(`  ${label} attempt ${String(count)}: ${message}; retrying`);
     await sleep(retryDelayMs);
   }
