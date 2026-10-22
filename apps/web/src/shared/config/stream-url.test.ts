@@ -1,6 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
-import { LOCAL_STREAM_URL, streamUrlProblem } from './stream-url';
+import { LOCAL_STREAM_URL, resolveStreamUrl, streamUrlProblem } from './stream-url';
+
+describe('resolveStreamUrl', () => {
+  it.each([undefined, '', '   '])('falls back to the local mock server for %j', (value) => {
+    expect(resolveStreamUrl(value)).toBe(LOCAL_STREAM_URL);
+  });
+
+  it('trims a set value', () => {
+    expect(resolveStreamUrl(' wss://log-stream-viewer-mock.fly.dev/ws\n')).toBe(
+      'wss://log-stream-viewer-mock.fly.dev/ws',
+    );
+  });
+});
 
 describe('streamUrlProblem', () => {
   it.each([

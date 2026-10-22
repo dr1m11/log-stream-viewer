@@ -2,6 +2,7 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig, type Plugin } from 'vite';
 
+import { securityHeaders } from './build/security-headers.ts';
 import { LOCAL_STREAM_URL, streamUrlProblem } from './src/shared/config/stream-url.ts';
 
 /**
@@ -46,7 +47,8 @@ function streamUrlCheck(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(), streamUrlCheck()],
+  // The URL check runs first, so a bad VITE_STREAM_URL fails with its message, not the CSP's.
+  plugins: [react(), tailwindcss(), streamUrlCheck(), securityHeaders()],
   resolve: {
     // Reads the `@/*` alias from tsconfig.app.json, so paths are declared once.
     tsconfigPaths: true,
