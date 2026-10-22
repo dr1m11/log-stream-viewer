@@ -49,7 +49,7 @@ WebSocket ─▶ [Worker] openStreamSocket → parseServerMessage → StreamStat
 
 **Reconnects and sessions** (intended default, to be confirmed in B4). A reconnect within a session keeps both stores and their positions — nothing is cleared, the new stream's events are appended after the old ones, and only `StreamStats.onHello` restarts `seq` tracking and the rate window. A new session (the user restarts the stream or changes the capacity) creates new stores on both sides.
 
-**Lockstep failure.** If `appendColumns` throws (a batch out of order or with inconsistent columns), the main-thread host catches the `RangeError`, shows an error state and restarts with a new session instead of rendering rows that may no longer match the worker's.
+**Lockstep failure.** If `appendColumns` throws (a batch out of order or with inconsistent columns), the main-thread host catches the `RangeError`, shows an error state and restarts with a new session instead of rendering rows that may no longer match the worker's. A message from the worker that cannot be deserialized (`messageerror`) is handled the same way. Each restart opens a new connection and the server admits only a few per client IP, so the store restarts at most three times per user start and then reports the stream as closed.
 
 **Capacity.** `DEFAULT_BUFFER_CAPACITY` 100,000 events, bounds `MIN_BUFFER_CAPACITY` 1,000 and `MAX_BUFFER_CAPACITY` 1,000,000; the user picks another value with `?buffer=`, clamped by `clampBufferCapacity`. Both stores get the same clamped value. 100K is the supported default; 1M is a best-effort upper bound behind the `?buffer=` clamp — about 140 MB on the main thread plus 245 MB in the worker, 385–400 MB for the tab — until the browser measurement (performance baseline in B2's T9, published in B6) confirms it.
 
@@ -74,6 +74,14 @@ The fixed columns are 22 bytes per slot; the rest is strings (and payloads in th
 - Strings are held twice, once per thread. That is the price of synchronous rendering on the main thread; the main store is still about 40% smaller than the worker's.
 - B3 filtering and search can run in the same worker against the authoritative store; B4 reconnection stays inside the worker as well.
 - The UI stores read only snapshots and the replica; tests drive the worker host with a fake port and the existing fake WebSocket, and `@lsv/core` with plain numbers for time.
+
+## Follow-ups (measured later)
+
+Known limits of the first implementation (B2, T4), each with the fix to apply if the browser measurements (B2's T9, B6) call for it:
+
+- **No main → worker backpressure.** The worker posts every batch as soon as it has it. A stalled main thread lets batches queue up in its message queue; the queue is bounded in time (the stall) and by the server's rate ceiling, not by size, and the main thread then catches up batch by batch. If traces show long catch-up tasks, the fix is an acknowledgement per animation frame: the worker holds rows back (in its store, which evicts) until the main thread has acknowledged the previous batch.
+- **Strings exist twice.** `message` and `traceId` are structured-cloned with every batch and kept by both stores. If heap size or GC pauses at 1M rows demand it, the fix is the UTF-8 string arena described under "Memory per event".
+- **`stop()` does not wait for a clean close.** The main thread posts `stop` and terminates the worker right away, so the socket usually ends with the browser's close instead of 1000. If the server-side close code starts to matter (B4 reconnection, session accounting), the main thread waits for the worker's `closed` message, with a timeout, before terminating it.
 
 ## Alternatives considered
 

@@ -13,4 +13,12 @@ export default defineConfig([
       'fsd/insignificant-slice': 'off',
     },
   },
+  {
+    // The stream entity has one consumer (pages/stream) until the table, pause and settings slices
+    // of B2 consume it too.
+    files: ['./src/entities/log-stream/**'],
+    rules: {
+      'fsd/insignificant-slice': 'off',
+    },
+  },
 ]);

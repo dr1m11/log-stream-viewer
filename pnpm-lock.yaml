@@ -120,6 +120,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@lsv/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@lsv/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol

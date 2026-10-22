@@ -56,6 +56,10 @@ export default defineConfig({
   build: {
     sourcemap: true,
   },
+  worker: {
+    // The stream worker starts as a module worker (`type: 'module'`); bundle it as one, too.
+    format: 'es',
+  },
   server: {
     port: portFromEnv('WEB_PORT', 5173),
     strictPort: true,
