@@ -1,0 +1,15 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // Static assets only, no Worker script (docs/adr/0003). Response headers come from dist/_headers,
+  // which the build generates (build/security-headers.ts). .github/workflows/deploy.yml deploys main
+  // and uploads a preview version per PR (alias pr-<number>).
+  "name": "log-stream-viewer",
+  "compatibility_date": "2026-10-22",
+  "workers_dev": true,
+  "preview_urls": true,
+  "assets": {
+    "directory": "./dist",
+    // Deep links get index.html with status 200; the client renders the route.
+    "not_found_handling": "single-page-application",
+  },
+}

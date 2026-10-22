@@ -2,7 +2,8 @@ import { defineConfig } from 'vitest/config';
 
 /**
  * One Vitest project per workspace package, added by the package itself when it is created:
- * `protocol` and `mock-server` (node) inline, `web` (jsdom) through `apps/web/vitest.config.ts`.
+ * `protocol`, `mock-server` and `web-build` (node) inline, `web` (jsdom) through
+ * `apps/web/vitest.config.ts`.
  * The node:test suites of .claude/hooks and scripts run with `pnpm test:hooks`, not Vitest.
  */
 export default defineConfig({
@@ -26,6 +27,15 @@ export default defineConfig({
       },
       // jsdom + Testing Library; reuses the app's Vite config (alias, React, Tailwind).
       'apps/web/vitest.config.ts',
+      // The web app's build tooling (Vite plugins) runs in Node, not in the browser.
+      {
+        test: {
+          name: 'web-build',
+          root: './apps/web',
+          include: ['build/**/*.test.ts'],
+          environment: 'node',
+        },
+      },
     ],
     coverage: {
       provider: 'v8',
@@ -33,7 +43,13 @@ export default defineConfig({
       // project's root when `--project` filters the run (see `isIncluded` in Vitest's coverage
       // provider), so both forms are listed. A pattern that matches nothing makes the thresholds
       // pass vacuously — check the report lists the package's files after changing these.
-      include: ['packages/*/src/**/*.ts', 'apps/*/src/**/*.{ts,tsx}', 'src/**/*.{ts,tsx}'],
+      include: [
+        'packages/*/src/**/*.ts',
+        'apps/*/src/**/*.{ts,tsx}',
+        'apps/web/build/**/*.ts',
+        'src/**/*.{ts,tsx}',
+        'build/**/*.ts',
+      ],
       exclude: ['**/*.{test,bench}.{ts,tsx}', '**/index.ts', '**/src/main.{ts,tsx}'],
       reporter: ['text', 'html', 'json-summary', 'json'],
       reportOnFailure: true,

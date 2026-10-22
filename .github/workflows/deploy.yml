@@ -1,11 +1,14 @@
 name: Deploy
 
 # Order (docs/adr/0003): the mock server first, then the web app, so a client never ships before a
-# server that speaks its protocol. Runs next to CI on main; the ruleset only lets PRs with a green
-# CI reach main.
+# server that speaks its protocol. Production deploys run next to CI on main (the ruleset only lets
+# PRs with a green CI reach main); pull requests get a preview version of the web app only.
 on:
   push:
     branches: [main]
+  # Preview versions of the web app (job `preview`); nothing deploys to production from a PR.
+  pull_request:
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
     inputs:
       force-server:
@@ -16,15 +19,22 @@ on:
 permissions:
   contents: read
 
+env:
+  WEB_URL: https://log-stream-viewer.marat-gabdrashitov17.workers.dev
+  # Production and every preview connect to the production mock server.
+  STREAM_URL: wss://log-stream-viewer-mock.fly.dev/ws
+
 # One deploy per ref at a time; a newer push waits instead of cancelling a deploy halfway. GitHub
 # keeps only the newest pending run, which is safe because `changes` diffs against production.
+# A newer push to a PR replaces its running preview upload.
 concurrency:
   group: deploy-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   changes:
     name: Detect changes
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -89,12 +99,143 @@ jobs:
       # stream sends hello and a batch. Retries for 30 s while the machine starts or resumes.
       - name: Smoke-test the stream
         run: >-
-          node scripts/smoke-ws.ts wss://log-stream-viewer-mock.fly.dev/ws
-          --origin https://log-stream-viewer.marat-gabdrashitov17.workers.dev
+          node scripts/smoke-ws.ts "$STREAM_URL"
+          --origin "$WEB_URL"
           --expect-version "$GITHUB_SHA"
 
-  # PR6 adds the web app's jobs here. `production` must run after `server`, also when `server` was
-  # skipped, but never after a failed server deploy:
-  #   needs: [changes, server]
-  #   if: ${{ !cancelled() && !failure() && github.ref == 'refs/heads/main' }}
-  # `preview` (pull_request events) connects to the production mock server.
+  # After the server, also when it was skipped (nothing changed), but never after a failed server
+  # deploy: a client must not ship before a server that speaks its protocol.
+  production:
+    name: Web app (Cloudflare Workers)
+    needs: [changes, server]
+    if: >-
+      ${{ !cancelled() && !failure() &&
+      github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: web
+      url: ${{ env.WEB_URL }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+
+      - name: Build
+        run: pnpm build
+        env:
+          VITE_STREAM_URL: ${{ env.STREAM_URL }}
+      - name: Deploy to Cloudflare Workers
+        working-directory: apps/web
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm exec wrangler deploy --message "main@${GITHUB_SHA::7}"
+
+      # The checks below run after the deploy, which has no automatic rollback: a red job means the
+      # version is already live (roll back with `wrangler rollback`).
+      # A deep link goes through the SPA fallback: it must return the app with status 200 and the
+      # CSP this build generated (dist/_headers). Retried for 60 s: a new workers.dev route takes a
+      # moment, and an edge may still serve the previous version for a few seconds.
+      - name: Smoke-check a deep link
+        run: |
+          expected="$(sed -n 's/^  Content-Security-Policy: //p' apps/web/dist/_headers)"
+          [[ -n "$expected" ]] || { echo "::error::dist/_headers has no CSP"; exit 1; }
+          headers="$RUNNER_TEMP/headers.txt"
+          body="$RUNNER_TEMP/body.html"
+          deadline=$((SECONDS + 60))
+          while :; do
+            : > "$headers"
+            : > "$body"
+            status="$(curl --silent --show-error --max-time 10 --dump-header "$headers" \
+              --output "$body" --write-out '%{http_code}' "$WEB_URL/streams/smoke?deep=link" || true)"
+            served="$(tr -d '\r' < "$headers" | sed -n 's/^content-security-policy: //Ip' | tail -n 1)"
+            if [[ "$status" == 200 && "$served" == "$expected" ]] && grep -q '<div id="root">' "$body"; then
+              echo "Status 200, the app, and the CSP of dist/_headers"
+              break
+            fi
+            if ((SECONDS >= deadline)); then
+              echo "::error::The deep link returned status ${status:-none} with CSP: ${served:-none}"
+              echo "Expected the app with CSP: $expected"
+              exit 1
+            fi
+            sleep 5
+          done
+
+      # The e2e smoke spec (only this file: other specs may need the local server's settings) against
+      # production and its mock server: "Connected", a growing counter, no console errors (CSP
+      # violations included), no axe violations.
+      - uses: ./.github/actions/playwright
+      - name: Playwright smoke test against production
+        run: pnpm --filter @lsv/web exec playwright test e2e/smoke.spec.ts
+        env:
+          E2E_BASE_URL: ${{ env.WEB_URL }}
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report-production
+          path: apps/web/playwright-report/
+          retention-days: 7
+
+  # Same-repository PRs only (fork PRs get no secrets); Renovate PRs skip previews to save noise.
+  # Previews connect to the production mock server, which allows the pr-<number> origins.
+  preview:
+    name: Web preview
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'renovate[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+
+      - name: Build
+        run: pnpm build
+        env:
+          VITE_STREAM_URL: ${{ env.STREAM_URL }}
+      - name: Upload a preview version
+        id: upload
+        working-directory: apps/web
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/wrangler-output.ndjson
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          pnpm exec wrangler versions upload \
+            --preview-alias "pr-${PR_NUMBER}" \
+            --message "PR #${PR_NUMBER} @ ${HEAD_SHA::7}"
+          url="$(jq -r 'select(.type == "version-upload") | .preview_alias_url // .preview_url // empty' \
+            "$WRANGLER_OUTPUT_FILE_PATH" | tail -n 1)"
+          if [[ -z "$url" ]]; then
+            echo "::error::wrangler did not report a preview URL"
+            exit 1
+          fi
+          echo "url=$url" | tee -a "$GITHUB_OUTPUT"
+      - name: Smoke-check a deep link
+        env:
+          PREVIEW_URL: ${{ steps.upload.outputs.url }}
+        run: >-
+          curl --fail --silent --show-error --retry 5 --retry-delay 3 --retry-all-errors
+          --output /dev/null "$PREVIEW_URL/streams/smoke?deep=link"
+      - name: Comment the preview URL
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
+        with:
+          header: preview
+          message: |
+            **Preview:** ${{ steps.upload.outputs.url }}
+
+            Built from ${{ github.event.pull_request.head.sha }} merged into the current `main`;
+            updates on every push to this PR.
+            It connects to the **production mock server** (`${{ env.STREAM_URL }}`), so server or
+            protocol changes in this PR are not live there until they merge.
