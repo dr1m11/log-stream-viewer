@@ -27,12 +27,13 @@ export default defineConfig({
       },
       // jsdom + Testing Library; reuses the app's Vite config (alias, React, Tailwind).
       'apps/web/vitest.config.ts',
-      // The web app's build tooling (Vite plugins) runs in Node, not in the browser.
+      // The web app's build tooling (Vite plugins) runs in Node, not in the browser; so do the
+      // tests of its Cloudflare Worker script, on Node's web-standard Request and Response.
       {
         test: {
           name: 'web-build',
           root: './apps/web',
-          include: ['build/**/*.test.ts'],
+          include: ['build/**/*.test.ts', 'worker/**/*.test.ts'],
           environment: 'node',
         },
       },
@@ -46,9 +47,9 @@ export default defineConfig({
       include: [
         'packages/*/src/**/*.ts',
         'apps/*/src/**/*.{ts,tsx}',
-        'apps/web/build/**/*.ts',
+        'apps/web/{build,worker}/**/*.ts',
         'src/**/*.{ts,tsx}',
-        'build/**/*.ts',
+        '{build,worker}/**/*.ts',
       ],
       exclude: ['**/*.{test,bench}.{ts,tsx}', '**/index.ts', '**/src/main.{ts,tsx}'],
       reporter: ['text', 'html', 'json-summary', 'json'],

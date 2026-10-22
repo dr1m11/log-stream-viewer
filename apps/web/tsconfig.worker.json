@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.worker.tsbuildinfo",
+    // The Cloudflare Workers runtime has web-standard fetch APIs, no Node and no document. The DOM
+    // lib supplies Request/Response instead of @cloudflare/workers-types; nothing else is used.
+    "lib": ["ES2023", "DOM"]
+  },
+  "include": ["worker"]
+}
