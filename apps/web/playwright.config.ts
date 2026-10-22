@@ -4,6 +4,8 @@ const isCI = Boolean(process.env.CI);
 // Same variable as vite.config.ts; `pnpm preview` inherits it.
 const previewPortEnv = process.env.PREVIEW_PORT?.trim();
 const previewPort = previewPortEnv === undefined || previewPortEnv === '' ? '4173' : previewPortEnv;
+const mockPortEnv = process.env.MOCK_PORT?.trim();
+const mockPort = mockPortEnv === undefined || mockPortEnv === '' ? '8787' : mockPortEnv;
 // A deployed app (`E2E_BASE_URL=https://… pnpm test:e2e`): no local servers, the specs run against
 // it and its own mock server. deploy.yml uses it to smoke-test production.
 const remoteBaseURL = process.env.E2E_BASE_URL?.trim() ?? '';
@@ -29,19 +31,21 @@ export default defineConfig({
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   // E2E runs against a production bundle built for the local mock server (`pnpm build:local`, or
-  // `pnpm build` with VITE_STREAM_URL=ws://localhost:8787/ws as in CI). The mock server therefore
-  // always listens on 8787. Neither server is reused, so a leftover dev server fails fast instead
-  // of serving stale code: run `pnpm ports:free` first.
+  // `pnpm build` with VITE_STREAM_URL=ws://localhost:8787/ws as in CI). The mock server listens on
+  // 8787 unless MOCK_PORT is set, for a second checkout next to the first; the bundle must then be
+  // built with the matching VITE_STREAM_URL. Neither server is reused, so a leftover dev server
+  // fails fast instead of serving stale code: run `pnpm ports:free` first.
   webServer: isRemote
     ? []
     : [
         {
           name: 'mock-server',
           command: 'pnpm --filter @lsv/mock-server start',
-          url: 'http://127.0.0.1:8787/healthz',
+          url: `http://127.0.0.1:${mockPort}/healthz`,
           reuseExistingServer: false,
           timeout: 30_000,
           env: {
+            PORT: mockPort,
             // The preview origin on whatever PREVIEW_PORT is in use (the default list has 4173 only).
             ALLOWED_ORIGINS: `http://localhost:${previewPort},http://127.0.0.1:${previewPort}`,
             // Parallel workers connect from the same IP; the default limit of 3 per IP is for production.
