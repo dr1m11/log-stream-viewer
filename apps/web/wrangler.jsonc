@@ -7,8 +7,9 @@
   "name": "log-stream-viewer",
   "main": "./worker/main.ts",
   // From 2025-04-01 navigation requests (Sec-Fetch-Mode: navigate) that match no asset get the SPA
-  // fallback without invoking the Worker script; only other misses reach it.
-  "compatibility_date": "2026-10-22",
+  // fallback without invoking the Worker script; only other misses reach it. No later than the
+  // newest date the workerd bundled with wrangler supports, so `wrangler dev` starts.
+  "compatibility_date": "2026-10-19",
   "workers_dev": true,
   "preview_urls": true,
   "assets": {
