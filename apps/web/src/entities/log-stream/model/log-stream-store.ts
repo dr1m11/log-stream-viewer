@@ -1,7 +1,6 @@
 import { createEventStore, type EventStore, type StreamCounters } from '@lsv/core';
 import {
   assertNever,
-  type LogEvent,
   type Scenario,
   type StreamLimits,
   type StreamSettings,
@@ -92,8 +91,6 @@ export interface LogStreamSnapshot {
   readonly start: number;
   /** `buffer.end` when the snapshot was taken: the position after the newest row. */
   readonly end: number;
-  /** The newest event, refreshed at most every {@link PREVIEW_INTERVAL_MS}. */
-  readonly latest: LogEvent | undefined;
   /**
    * The last failure the store recovered from on its own by restarting the stream (the replica
    * fell out of step with the worker's buffer), for the UI to mention; cleared by `start()`.
@@ -131,9 +128,6 @@ export interface LogStreamStore {
    */
   readonly configure: (change: StreamSettingsChange) => string | undefined;
 }
-
-/** The latest-event preview changes at most four times per second, so it stays readable. */
-export const PREVIEW_INTERVAL_MS = 250;
 
 /**
  * Restarts the store makes on its own per `start()` when the replica can no longer be trusted.
@@ -208,7 +202,6 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
   let worker: StreamWorker | undefined;
   let session = 0;
   let frame: number | undefined;
-  let previewTimer: ReturnType<typeof setTimeout> | undefined;
 
   let buffer = createEventStore({ capacity, keepPayload: false });
   let view = readOnlyView(buffer);
@@ -219,10 +212,6 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
   let settings = NO_SETTINGS_REQUESTS;
   /** Numbers the `configure` request ids; never reset, so an id is unique per store. */
   let configureRequests = 0;
-  /** The event the preview shows, and the buffer end it was read at. */
-  let preview: LogEvent | undefined;
-  let previewEnd = 0;
-  let previewShownAt = Number.NEGATIVE_INFINITY;
 
   let snapshot: LogStreamSnapshot = {
     status,
@@ -230,7 +219,6 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
     buffer: view,
     start: 0,
     end: 0,
-    latest: undefined,
     error: undefined,
     settings,
   };
@@ -245,22 +233,7 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
 
   function publish(): void {
     frame = undefined;
-    const now = performance.now();
     const { start, end } = buffer;
-    if (end !== previewEnd) {
-      const wait = previewShownAt + PREVIEW_INTERVAL_MS - now;
-      if (wait <= 0) {
-        preview = buffer.eventAt(end - 1);
-        previewEnd = end;
-        previewShownAt = now;
-      } else {
-        // Show the newest event once the interval has passed, even if no other update comes.
-        previewTimer ??= setTimeout(() => {
-          previewTimer = undefined;
-          schedulePublish();
-        }, wait);
-      }
-    }
     const previous = snapshot;
     const shown =
       status.phase === 'connected' || counters.eventsPerSecond === 0
@@ -273,7 +246,6 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
       previous.buffer === view &&
       previous.start === start &&
       previous.end === end &&
-      previous.latest === preview &&
       previous.error === error &&
       previous.settings === settings
     ) {
@@ -285,7 +257,6 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
       buffer: view,
       start,
       end,
-      latest: preview,
       error,
       settings,
     };
@@ -296,10 +267,6 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
     if (frame !== undefined) {
       cancelAnimationFrame(frame);
       frame = undefined;
-    }
-    if (previewTimer !== undefined) {
-      clearTimeout(previewTimer);
-      previewTimer = undefined;
     }
   }
 
@@ -410,9 +377,6 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
     status = CONNECTING;
     counters = NO_COUNTERS;
     settings = NO_SETTINGS_REQUESTS;
-    preview = undefined;
-    previewEnd = 0;
-    previewShownAt = Number.NEGATIVE_INFINITY;
     if (worker === undefined) {
       worker = spawnWorker();
       worker.onmessage = receive;
