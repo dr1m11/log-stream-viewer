@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { type CSSProperties, memo } from 'react';
 
 import { EventTime, LevelLabel } from '@/entities/log-event';
 import type { LogBufferView } from '@/entities/log-stream';
@@ -21,9 +21,9 @@ interface CellsProps {
 }
 
 /**
- * The cells of the event at `position`. The event at a position never changes, so this re-renders
- * only for a new buffer (session): when the rows shift (new rows, eviction) only the cells of rows
- * that just came into view render and format their timestamp.
+ * The cells of the event at `position`. The event at a position never changes, so they re-render
+ * only when their row element shows another position (rows are recycled by virtual index) or the
+ * buffer changes (a new session).
  */
 const LogCells = memo(function LogCells({ buffer, position }: CellsProps) {
   if (!buffer.has(position)) {
@@ -59,7 +59,7 @@ const LogCells = memo(function LogCells({ buffer, position }: CellsProps) {
 
 export interface LogRowProps {
   readonly buffer: LogBufferView;
-  /** Buffer position of the event; also the React key, so a row keeps its cells while it shifts. */
+  /** Buffer position of the event. The React key is the virtual index: row elements are reused. */
   readonly position: number;
   /** Virtual index (`position - start`), read by the virtualizer from `data-index`. */
   readonly index: number;
@@ -68,6 +68,15 @@ export interface LogRowProps {
   /** Whether this is the grid's active row (keyboard cursor). */
   readonly active: boolean;
 }
+
+// Shared by every row and every render: the active state is styled through `data-active`.
+const ROW_STYLE: CSSProperties = { height: ROW_HEIGHT };
+const ROW_CLASS = cn(
+  ROW_COLUMNS,
+  'relative whitespace-nowrap',
+  'data-active:before:absolute data-active:before:inset-y-0 data-active:before:left-0 data-active:before:w-1 data-active:before:bg-accent',
+  'group-focus-visible:data-active:outline-2 group-focus-visible:data-active:-outline-offset-2 group-focus-visible:data-active:outline-focus',
+);
 
 /**
  * One data row. Its height is fixed ({@link ROW_HEIGHT}) for now; an expandable row would let the
@@ -83,13 +92,8 @@ export const LogRow = memo(function LogRow({ buffer, position, index, id, active
       aria-rowindex={index + 2}
       data-index={index}
       data-active={active || undefined}
-      style={{ height: ROW_HEIGHT }}
-      className={cn(
-        ROW_COLUMNS,
-        'relative whitespace-nowrap',
-        'data-active:before:absolute data-active:before:inset-y-0 data-active:before:left-0 data-active:before:w-1 data-active:before:bg-accent',
-        'group-focus-visible:data-active:outline-2 group-focus-visible:data-active:-outline-offset-2 group-focus-visible:data-active:outline-focus',
-      )}
+      style={ROW_STYLE}
+      className={ROW_CLASS}
     >
       <LogCells buffer={buffer} position={position} />
     </div>

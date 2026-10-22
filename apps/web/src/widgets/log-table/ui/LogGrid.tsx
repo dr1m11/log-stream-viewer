@@ -1,4 +1,9 @@
-import { observeElementOffset, useVirtualizer, type Virtualizer } from '@tanstack/react-virtual';
+import {
+  observeElementOffset,
+  observeElementRect,
+  useVirtualizer,
+  type Virtualizer,
+} from '@tanstack/react-virtual';
 import { ArrowDownToLine } from 'lucide-react';
 import {
   type KeyboardEvent,
@@ -30,6 +35,7 @@ import { COLUMN_COUNT, LogRow, ROW_COLUMNS } from './LogRow';
 const OVERSCAN = 10;
 
 type OffsetListener = Parameters<typeof observeElementOffset>[1];
+type RectListener = Parameters<typeof observeElementRect>[1];
 
 function estimateRowSize(): number {
   return ROW_HEIGHT;
@@ -57,7 +63,15 @@ export interface LogGridProps {
  * and make the rows in view jump; the grid moves the scroll offset up by as many rows instead.
  *
  * Every scroll write is reported to the virtualizer at once, so it renders the rows of the new
- * offset in the same frame instead of waiting for the browser's scroll event.
+ * offset in the same frame instead of waiting for the browser's scroll event. Scroll targets are
+ * computed from known numbers (row count, row height, the viewport height the virtualizer's
+ * resize observer reports, the last offset written or seen), so following the tail reads no
+ * layout per frame.
+ *
+ * **Fixed virtualizer count.** The virtualizer always counts `buffer.capacity` rows and the grid
+ * renders only the indexes below `end - start`, with its own content height. TanStack Virtual
+ * rebuilds its measurements in O(count) whenever the count changes (11 ms per batch near 1M rows);
+ * with a fixed count that happens once per buffer.
  */
 export function LogGrid({ buffer, start, end }: LogGridProps) {
   const headingId = useId();
@@ -83,6 +97,11 @@ export function LogGrid({ buffer, start, end }: LogGridProps) {
   const lastScrollTopRef = useRef(0);
   /** What the rows were laid out for in the last commit, to measure eviction. */
   const laidOutRef = useRef({ buffer, start });
+  /** Height of the scroll viewport (header included), from the virtualizer's resize observer. */
+  const viewportHeightRef = useRef(0);
+  /** `following` and the row count of the last commit, for the resize observer. */
+  const followingRef = useRef(following);
+  const countRef = useRef(end - start);
 
   const observeOffset = useCallback(
     (instance: Virtualizer<HTMLDivElement, Element>, listener: OffsetListener) => {
@@ -96,29 +115,54 @@ export function LogGrid({ buffer, start, end }: LogGridProps) {
     [],
   );
 
+  /**
+   * Scrolls to `top`, which must lie within the scroll range. Reads nothing back (a read after
+   * the commit would force a layout every frame); the browser may round the offset, which the
+   * scroll handler tolerates.
+   */
   const writeScrollTop = useCallback((element: HTMLElement, top: number) => {
-    const before = element.scrollTop;
-    if (Math.abs(before - top) < 0.5) return;
+    if (Math.abs(lastScrollTopRef.current - top) < 0.5) return;
     element.scrollTop = top;
-    // The browser rounds and clamps: remember what it actually took.
-    const written = element.scrollTop;
-    if (written === before) return;
-    ownScrollTopRef.current = written;
-    lastScrollTopRef.current = written;
-    offsetListenerRef.current?.(written, false);
+    ownScrollTopRef.current = top;
+    lastScrollTopRef.current = top;
+    offsetListenerRef.current?.(top, false);
   }, []);
+
+  const pinToBottom = useCallback(
+    (element: HTMLElement) => {
+      const contentHeight = HEADER_HEIGHT + countRef.current * ROW_HEIGHT;
+      writeScrollTop(element, Math.max(0, contentHeight - viewportHeightRef.current));
+    },
+    [writeScrollTop],
+  );
+
+  const observeRect = useCallback(
+    (instance: Virtualizer<HTMLDivElement, Element>, listener: RectListener) =>
+      observeElementRect(instance, (rect) => {
+        const previous = viewportHeightRef.current;
+        viewportHeightRef.current = rect.height;
+        listener(rect);
+        // A resize moves no scroll offset and fires no scroll event: pin the tail again. Not on
+        // the first measurement, which the layout effect below follows up anyway.
+        const element = instance.scrollElement;
+        if (previous !== 0 && previous !== rect.height && followingRef.current && element) {
+          pinToBottom(element);
+        }
+      }),
+    [pinToBottom],
+  );
 
   const count = end - start;
   // eslint-disable-next-line react-hooks/incompatible-library -- no React Compiler in this build; the grid re-renders on every range change anyway
   const virtualizer = useVirtualizer({
-    count,
+    count: buffer.capacity,
     getScrollElement: () => scrollRef.current,
     estimateSize: estimateRowSize,
     overscan: OVERSCAN,
     // The sticky header sits above the rows inside the scroll element.
     scrollMargin: HEADER_HEIGHT,
-    scrollPaddingStart: HEADER_HEIGHT,
     observeElementOffset: observeOffset,
+    observeElementRect: observeRect,
   });
 
   // Before paint: keep the newest row in view, or the rows in view in place.
@@ -126,16 +170,18 @@ export function LogGrid({ buffer, start, end }: LogGridProps) {
     const element = scrollRef.current;
     const previous = laidOutRef.current;
     laidOutRef.current = { buffer, start };
+    followingRef.current = following;
+    countRef.current = end - start;
     if (element === null) return;
     if (following) {
-      writeScrollTop(element, element.scrollHeight - element.clientHeight);
+      pinToBottom(element);
     } else if (previous.buffer === buffer && start > previous.start) {
       writeScrollTop(
         element,
-        anchorScrollTop(element.scrollTop, start - previous.start, ROW_HEIGHT),
+        anchorScrollTop(lastScrollTopRef.current, start - previous.start, ROW_HEIGHT),
       );
     }
-  }, [buffer, start, end, following, writeScrollTop]);
+  }, [buffer, start, end, following, pinToBottom, writeScrollTop]);
 
   function handleScroll(event: UIEvent<HTMLDivElement>): void {
     const element = event.currentTarget;
@@ -154,8 +200,10 @@ export function LogGrid({ buffer, start, end }: LogGridProps) {
   }
 
   function handleWheel(event: WheelEvent<HTMLDivElement>): void {
-    // Arrives before the scroll it causes, and even when the grid cannot move up at all.
-    if (event.deltaY < 0 && following) setFollowing(false);
+    // Arrives before the scroll it causes, and even when the grid cannot move up at all. A
+    // sideways pan or a Ctrl+wheel zoom is not a scroll up.
+    const up = event.deltaY < 0 && Math.abs(event.deltaY) > Math.abs(event.deltaX);
+    if (up && !event.ctrlKey && following) setFollowing(false);
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
@@ -187,7 +235,11 @@ export function LogGrid({ buffer, start, end }: LogGridProps) {
   function handleClick(event: MouseEvent<HTMLDivElement>): void {
     const row = event.target instanceof Element ? event.target.closest('[data-index]') : null;
     const index = Number(row?.getAttribute('data-index'));
-    if (Number.isInteger(index)) setActive(start + index);
+    if (!Number.isInteger(index)) return;
+    const position = start + index;
+    setActive(position);
+    // Like the keyboard: a row other than the newest holds the view, so it does not scroll away.
+    setFollowing(position === end - 1);
   }
 
   function jumpToLatest(): void {
@@ -196,14 +248,34 @@ export function LogGrid({ buffer, start, end }: LogGridProps) {
     scrollRef.current?.focus({ preventScroll: true });
   }
 
+  // The virtualizer counts the whole capacity; indexes from `count` on are not rows (yet).
   const items = virtualizer.getVirtualItems();
-  const firstItem = items[0];
+  const firstIndex = items[0]?.index ?? 0;
+  const lastIndex = Math.min(items.at(-1)?.index ?? -1, count - 1);
   const rowId = (position: number): string => `${rowBaseId}row-${String(position)}`;
   // Only a row in the DOM can be the active descendant; the cursor may be scrolled out of view.
   const activeId =
-    active !== undefined && items.some((item) => start + item.index === active)
+    active !== undefined && active - start >= firstIndex && active - start <= lastIndex
       ? rowId(active)
       : undefined;
+  // Keyed by virtual index, not by position: while following a fast stream every row in view is a
+  // new position each frame, and recycling the row elements (only their cells re-render) costs
+  // about a fifth to a third less main-thread time at 10K events/s than mounting new ones. Where
+  // an index keeps its position (scrolling while `start` stands still) the cells' memo skips them.
+  const rows = [];
+  for (let index = firstIndex; index <= lastIndex; index++) {
+    const position = start + index;
+    rows.push(
+      <LogRow
+        key={index}
+        buffer={buffer}
+        position={position}
+        index={index}
+        id={rowId(position)}
+        active={position === active}
+      />,
+    );
+  }
 
   return (
     <section
@@ -213,7 +285,12 @@ export function LogGrid({ buffer, start, end }: LogGridProps) {
       <h2 id={headingId} className="border-b border-border px-4 py-2.5 text-sm font-semibold">
         Events
       </h2>
-      <div className="relative min-h-0 flex-1">
+      {/*
+        The grid's focus ring is drawn by this wrapper, inside the panel and above the sticky
+        header: the rounded panel clips an outline outside the grid, and the header covers the
+        top edge of one drawn on the grid itself.
+      */}
+      <div className="relative min-h-0 flex-1 after:pointer-events-none after:absolute after:inset-0 after:z-20 after:rounded-b-md has-[[role=grid]:focus-visible]:after:outline-2 has-[[role=grid]:focus-visible]:after:-outline-offset-2 has-[[role=grid]:focus-visible]:after:outline-focus">
         <div
           ref={scrollRef}
           role="grid"
@@ -227,7 +304,8 @@ export function LogGrid({ buffer, start, end }: LogGridProps) {
           onKeyDown={handleKeyDown}
           onClick={handleClick}
           // The grid anchors rows itself; the browser's scroll anchoring would fight it.
-          className="group absolute inset-0 overflow-auto font-mono text-sm [overflow-anchor:none]"
+          // The wrapper draws the focus ring (see above).
+          className="group absolute inset-0 overflow-auto font-mono text-sm [overflow-anchor:none] focus-visible:outline-none"
         >
           <div className="min-w-xl">
             <div role="rowgroup" className="sticky top-0 z-10 bg-surface-raised">
@@ -248,26 +326,12 @@ export function LogGrid({ buffer, start, end }: LogGridProps) {
                 <div role="columnheader">Message</div>
               </div>
             </div>
-            <div style={{ height: virtualizer.getTotalSize() }}>
+            <div style={{ height: count * ROW_HEIGHT }}>
               <div
                 role="rowgroup"
-                style={{
-                  transform: `translateY(${String((firstItem?.start ?? HEADER_HEIGHT) - HEADER_HEIGHT)}px)`,
-                }}
+                style={{ transform: `translateY(${String(firstIndex * ROW_HEIGHT)}px)` }}
               >
-                {items.map((item) => {
-                  const position = start + item.index;
-                  return (
-                    <LogRow
-                      key={position}
-                      buffer={buffer}
-                      position={position}
-                      index={item.index}
-                      id={rowId(position)}
-                      active={position === active}
-                    />
-                  );
-                })}
+                {rows}
               </div>
             </div>
           </div>

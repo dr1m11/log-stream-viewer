@@ -13,6 +13,41 @@ const VIEWPORT_HEIGHT = 312;
 /** Rows below the sticky header: (312 - 32) / 28. */
 const ROWS_IN_VIEW = 10;
 
+/** The current viewport height of the fake layout; a test may resize it. */
+let viewportHeight = VIEWPORT_HEIGHT;
+
+/**
+ * Resize observers created by the code under test (the virtualizer watches the grid). jsdom has
+ * none; `resizeObservers()` reports a new size to all of them, as the browser would.
+ */
+const resizeCallbacks = new Set<() => void>();
+
+class FakeResizeObserver implements ResizeObserver {
+  readonly #notify: () => void;
+
+  constructor(callback: ResizeObserverCallback) {
+    this.#notify = () => {
+      callback([], this);
+    };
+  }
+  observe(): void {
+    resizeCallbacks.add(this.#notify);
+  }
+  unobserve(): void {
+    resizeCallbacks.delete(this.#notify);
+  }
+  disconnect(): void {
+    resizeCallbacks.delete(this.#notify);
+  }
+}
+
+function resizeViewport(height: number): void {
+  viewportHeight = height;
+  act(() => {
+    for (const notify of resizeCallbacks) notify();
+  });
+}
+
 /**
  * jsdom has no layout. Gives the grid (the scroll element) a viewport, a content height derived
  * from its `aria-rowcount` and a `scrollTop` that the browser would clamp; every other element
@@ -24,16 +59,16 @@ function installGridLayout(): void {
   const contentHeight = (element: Element): number =>
     HEADER_HEIGHT + (Number(element.getAttribute('aria-rowcount')) - 1) * ROW_HEIGHT;
   const maxScrollTop = (element: Element): number =>
-    Math.max(0, contentHeight(element) - VIEWPORT_HEIGHT);
+    Math.max(0, contentHeight(element) - viewportHeight);
 
   vi.spyOn(Element.prototype, 'clientHeight', 'get').mockImplementation(function (this: Element) {
-    return isGrid(this) ? VIEWPORT_HEIGHT : 0;
+    return isGrid(this) ? viewportHeight : 0;
   });
   vi.spyOn(Element.prototype, 'clientWidth', 'get').mockImplementation(function (this: Element) {
     return isGrid(this) ? 800 : 0;
   });
   vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockImplementation(function (this: Element) {
-    return isGrid(this) ? Math.max(VIEWPORT_HEIGHT, contentHeight(this)) : 0;
+    return isGrid(this) ? Math.max(viewportHeight, contentHeight(this)) : 0;
   });
   vi.spyOn(Element.prototype, 'scrollTop', 'get').mockImplementation(function (this: Element) {
     return scrollTops.get(this) ?? 0;
@@ -95,11 +130,15 @@ function activeRow(grid: HTMLElement): HTMLElement | null {
 
 describe('LogGrid', () => {
   beforeEach(() => {
+    viewportHeight = VIEWPORT_HEIGHT;
+    resizeCallbacks.clear();
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver);
     installGridLayout();
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('shows a waiting message until the first event arrives', () => {
@@ -282,6 +321,43 @@ describe('LogGrid', () => {
     expect(activeRow(grid)).toHaveTextContent('event 300');
     expect(grid.scrollTop).toBe(maxScrollTop(grid));
     expect(screen.queryByRole('button', { name: 'Jump to latest' })).not.toBeInTheDocument();
+  });
+
+  it('ignores sideways wheel pans and Ctrl+wheel zoom', () => {
+    const { buffer, append } = createBuffer(1000);
+    append(200);
+    const { grid } = renderGrid(buffer);
+
+    fireEvent.wheel(grid, { deltaX: -80, deltaY: -10 });
+    fireEvent.wheel(grid, { deltaY: -40, ctrlKey: true });
+
+    expect(screen.queryByRole('button', { name: 'Jump to latest' })).not.toBeInTheDocument();
+  });
+
+  it('keeps the newest row in view when the viewport resizes while following', () => {
+    const { buffer, append } = createBuffer(1000);
+    append(200);
+    const { grid } = renderGrid(buffer);
+
+    resizeViewport(200);
+
+    expect(grid.scrollTop).toBe(maxScrollTop(grid));
+    expect(dataRows(grid).at(-1)).toHaveTextContent('event 200');
+  });
+
+  it('holds the view on a row the user clicks while following', async () => {
+    const user = userEvent.setup();
+    const { buffer, append } = createBuffer(1000);
+    append(200);
+    const { grid, update } = renderGrid(buffer);
+
+    await user.click(within(grid).getByText('event 195'));
+    append(50);
+    update();
+
+    expect(activeRow(grid)).toHaveTextContent('event 195');
+    expect(screen.getByRole('button', { name: 'Jump to latest' })).toBeVisible();
+    expect(grid.scrollTop).toBeLessThan(maxScrollTop(grid));
   });
 
   it('activates the row the user clicks', async () => {
