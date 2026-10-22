@@ -38,8 +38,8 @@ export default defineConfig([
     },
   },
   {
-    // The table is a self-contained block of the single page; it stays a widget because it
-    // composes features (pause, row details) and entities, which a page segment should not own.
+    // The table has one consumer, the single page, but it is a self-contained block with its own
+    // state, scroll logic and tests that composes two entities (the stream and its events).
     files: ['./src/widgets/log-table/**'],
     rules: {
       'fsd/insignificant-slice': 'off',
