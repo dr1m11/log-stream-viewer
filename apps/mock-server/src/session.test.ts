@@ -292,8 +292,15 @@ describe('Session', () => {
     run(session, T0 + 2000, T0 + 2050);
     expect(socket.ofType('batch')).toHaveLength(batches + 1);
     expect(socket.ofType('batch').at(-1)?.dropped).toBeGreaterThan(0);
-    // Then nothing is written for STALL_TIMEOUT_MS: the client reads nothing.
-    run(session, T0 + 2050, T0 + 2050 + STALL_TIMEOUT_MS + 100);
+    // Then nothing is written: a pause shorter than STALL_TIMEOUT_MS is survived…
+    run(session, T0 + 2050, T0 + 2000 + STALL_TIMEOUT_MS - BATCH_INTERVAL_MS);
+    expect(socket.terminated).toBe(false);
+    // …but a client that keeps reading nothing is terminated.
+    run(
+      session,
+      T0 + 2000 + STALL_TIMEOUT_MS - BATCH_INTERVAL_MS,
+      T0 + 2050 + STALL_TIMEOUT_MS + 100,
+    );
     expect(socket.terminated).toBe(true);
     expect(session.endReason).toBe('stalled');
   });
