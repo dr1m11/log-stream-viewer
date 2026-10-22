@@ -21,4 +21,12 @@ export default defineConfig([
       'fsd/insignificant-slice': 'off',
     },
   },
+  {
+    // Stream settings are a user action with a single page to live on; a feature keeps them out of
+    // the page's composition code and next to their own model.
+    files: ['./src/features/configure-stream/**'],
+    rules: {
+      'fsd/insignificant-slice': 'off',
+    },
+  },
 ]);
