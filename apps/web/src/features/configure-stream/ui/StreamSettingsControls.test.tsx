@@ -197,6 +197,27 @@ describe('StreamSettingsControls', () => {
     expect(FakeWorker.latest().messages()).toHaveLength(2);
   });
 
+  it('keeps showing a pending scenario after a rate commit, and sends no duplicate', async () => {
+    const { user } = setup();
+    connect();
+    const { scenario, rate } = controls();
+
+    await user.selectOptions(scenario, 'Error burst');
+    await user.clear(rate);
+    await user.type(rate, '900{Enter}');
+
+    expect(scenario).toHaveValue('error-burst');
+    expect(rate).toHaveValue(900);
+    // Picking the pending scenario again changes nothing; going back to Steady is a real change.
+    await user.selectOptions(scenario, 'Error burst');
+    await user.selectOptions(scenario, 'Steady');
+    expect(configures()).toEqual([
+      expect.objectContaining({ requestId: 'cfg-1', scenario: 'error-burst' }),
+      expect.objectContaining({ requestId: 'cfg-2', rate: 900, scenario: undefined }),
+      expect.objectContaining({ requestId: 'cfg-3', scenario: 'steady', rate: undefined }),
+    ]);
+  });
+
   it('shows a rejected change and restores the effective settings', async () => {
     const { user } = setup();
     connect();
@@ -205,6 +226,9 @@ describe('StreamSettingsControls', () => {
     await user.selectOptions(scenario, 'Traffic spike');
     await user.clear(rate);
     await user.type(rate, '900{Enter}');
+    // Both unanswered changes show until the server answers.
+    expect(scenario).toHaveValue('traffic-spike');
+    expect(rate).toHaveValue(900);
     post({
       type: 'stream-error',
       session: 1,

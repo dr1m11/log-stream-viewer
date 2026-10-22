@@ -441,6 +441,41 @@ describe('createLogStreamStore', () => {
     });
   });
 
+  it('merges unanswered requests, so a rate after a scenario keeps the pending scenario', () => {
+    const { store, send, hello } = setup();
+    hello();
+    const first = store.configure({ scenario: 'error-burst' });
+    const second = store.configure({ rate: 900 });
+    expect(store.getSnapshot().settings.pending).toEqual({
+      requestId: second,
+      rate: 900,
+      scenario: 'error-burst',
+    });
+
+    // The answer to the older request applies its settings but leaves the merged request pending.
+    send({ type: 'config', session: 1, requestId: first, rate: 200, scenario: 'error-burst' });
+    nextFrame();
+    expect(store.getSnapshot()).toMatchObject({
+      status: { stream: { rate: 200, scenario: 'error-burst' } },
+      settings: { pending: { requestId: second, rate: 900, scenario: 'error-burst' } },
+    });
+
+    send({ type: 'config', session: 1, requestId: second, rate: 900, scenario: 'error-burst' });
+    nextFrame();
+    expect(store.getSnapshot()).toMatchObject({
+      status: { stream: { rate: 900, scenario: 'error-burst' } },
+      settings: { pending: undefined },
+    });
+
+    // Once answered, a new request starts from the effective settings again.
+    const third = store.configure({ rate: 100 });
+    expect(store.getSnapshot().settings.pending).toEqual({
+      requestId: third,
+      rate: 100,
+      scenario: undefined,
+    });
+  });
+
   it('surfaces a stream-error, keeps the effective settings and clears it on the next request', () => {
     const { store, send, hello } = setup();
     hello();

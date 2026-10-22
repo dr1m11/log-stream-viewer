@@ -67,8 +67,10 @@ export interface StreamSettingsChange {
 /** The state of the settings changes the user asked for (`configure`). */
 export interface StreamSettingsRequests {
   /**
-   * The latest change sent and not answered yet: the server's `config` with its `requestId`
-   * clears it (and updates `status.stream`), as do a `stream-error` and a new session.
+   * The changes sent and not answered yet, merged (a later value of a field wins) under the
+   * newest `requestId`. The server applies every `configure` in order, so its answer to the newest
+   * one reflects them all: the `config` with that `requestId` clears it (and updates
+   * `status.stream`), as do a `stream-error` and a new session.
    */
   readonly pending: (StreamSettingsChange & { readonly requestId: string }) | undefined;
   /**
@@ -121,8 +123,8 @@ export interface LogStreamStore {
   /** Closes the connection, terminates the worker and cancels pending publications. */
   readonly stop: () => void;
   /**
-   * Asks the server to change the stream's settings and publishes the request as
-   * `settings.pending` right away. Returns the request's id (`cfg-<n>`), or `undefined` without
+   * Asks the server to change the stream's settings and publishes the request right away as
+   * `settings.pending`, merged with the changes still unanswered. Returns the request's id (`cfg-<n>`), or `undefined` without
    * sending anything unless the stream is connected. Each call is one client message and the
    * server closes a client that sends more than 20 per second (`docs/protocol.md`), so call it
    * once per user commit, never per input event.
@@ -452,7 +454,17 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
       configureRequests++;
       const requestId = `cfg-${String(configureRequests)}`;
       worker.postMessage({ type: 'configure', session, requestId, rate, scenario });
-      settings = { pending: { requestId, rate, scenario }, error: undefined };
+      // Keep what earlier unanswered requests changed: a rate after a scenario must not hide the
+      // pending scenario, or the controls would show the old one while the server applies the new.
+      const previous = settings.pending;
+      settings = {
+        pending: {
+          requestId,
+          rate: rate ?? previous?.rate,
+          scenario: scenario ?? previous?.scenario,
+        },
+        error: undefined,
+      };
       // Publish now rather than on the next frame: the control that asked shows the pending
       // value at once instead of flashing back to the effective one for a frame.
       if (frame !== undefined) {
