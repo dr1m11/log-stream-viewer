@@ -1,0 +1,121 @@
+{
+  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
+  extends: [
+    'config:recommended',
+    ':semanticCommits',
+    ':semanticCommitScope(deps)',
+    'helpers:pinGitHubActionDigests',
+  ],
+  timezone: 'Asia/Tbilisi',
+  schedule: ['before 6am on monday'],
+  // Let new releases settle before proposing them (catches yanked or broken publishes).
+  minimumReleaseAge: '3 days',
+  rangeStrategy: 'pin',
+  labels: ['dependencies'],
+  dependencyDashboard: true,
+  lockFileMaintenance: {
+    enabled: true,
+    schedule: ['before 6am on monday'],
+  },
+  packageRules: [
+    {
+      // `pin` would turn `engines.node` (>=24.15.0, enforced by engineStrict) into one exact version.
+      description: 'Keep the Node ranges in engines and .nvmrc as ranges',
+      matchDepTypes: ['engines'],
+      rangeStrategy: 'auto',
+    },
+    {
+      matchManagers: ['nvm'],
+      rangeStrategy: 'replace',
+    },
+    {
+      description: 'typescript-eslint supports TypeScript < 6.1 (docs/adr/0002-toolchain-baseline.md)',
+      matchPackageNames: ['typescript'],
+      allowedVersions: '<6.1.0',
+    },
+    {
+      description: 'Runtime is Node 24 (.nvmrc, the mock server image, engines)',
+      matchPackageNames: ['@types/node'],
+      allowedVersions: '<25',
+    },
+    {
+      description: 'Stay on the Node 24 LTS line in .nvmrc, the Dockerfile and engines',
+      matchPackageNames: ['node'],
+      allowedVersions: '<25',
+    },
+    {
+      groupName: 'react',
+      matchPackageNames: ['react', 'react-dom', '@types/react', '@types/react-dom'],
+    },
+    {
+      groupName: 'vite',
+      matchPackageNames: ['vite', '@vitejs/**'],
+    },
+    {
+      groupName: 'vitest',
+      matchPackageNames: ['vitest', '@vitest/**'],
+    },
+    {
+      groupName: 'testing-library',
+      matchPackageNames: ['@testing-library/**', 'jsdom'],
+    },
+    {
+      groupName: 'playwright',
+      matchPackageNames: ['playwright', '@playwright/**', '@axe-core/**'],
+    },
+    {
+      groupName: 'eslint',
+      matchPackageNames: [
+        'eslint',
+        '@eslint/**',
+        'typescript-eslint',
+        'eslint-config-*',
+        'eslint-plugin-*',
+        '@eslint-react/**',
+        '@vitest/eslint-plugin',
+        'globals',
+      ],
+    },
+    {
+      groupName: 'commit tooling',
+      matchPackageNames: ['@commitlint/**', 'husky', 'lint-staged'],
+    },
+    {
+      groupName: 'tailwind',
+      matchPackageNames: ['tailwindcss', '@tailwindcss/**', 'prettier-plugin-tailwindcss'],
+    },
+    {
+      groupName: 'steiger',
+      matchPackageNames: ['steiger', '@steiger/**', '@feature-sliced/**'],
+    },
+    {
+      groupName: 'tanstack',
+      matchPackageNames: ['@tanstack/**'],
+    },
+    {
+      groupName: 'ws',
+      matchPackageNames: ['ws', '@types/ws'],
+    },
+    {
+      groupName: 'cloudflare',
+      matchPackageNames: ['wrangler', '@cloudflare/**'],
+    },
+    {
+      groupName: 'github actions',
+      matchManagers: ['github-actions'],
+    },
+    {
+      // The pnpm catalog (pnpm-workspace.yaml) holds only dev tooling.
+      description: 'Low-risk dev tooling updates merge themselves once required checks pass',
+      matchDepTypes: ['devDependencies', 'pnpm.catalog.default'],
+      matchUpdateTypes: ['minor', 'patch', 'pin', 'digest'],
+      automerge: true,
+      platformAutomerge: true,
+    },
+    {
+      description: 'Compiler updates get a manual look',
+      matchPackageNames: ['typescript'],
+      automerge: false,
+    },
+  ],
+}
