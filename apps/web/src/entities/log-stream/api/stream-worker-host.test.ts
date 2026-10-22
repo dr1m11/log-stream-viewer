@@ -279,7 +279,14 @@ describe('createStreamWorkerHost', () => {
     expect(port.messages().at(-1)).toMatchObject({
       type: 'batch',
       columns: { firstPosition: 0, count: 1 },
-      counters: { invalidFrames: 1 },
+      counters: { invalidFrames: 1, received: 1 },
+    });
+
+    // Only the appended event counts as received; the rejected ones surface as missed.
+    handlers.onBatch?.(testBatch([4]));
+    expect(port.messages().at(-1)).toMatchObject({
+      columns: { firstPosition: 1, count: 1 },
+      counters: { received: 2, missed: 2, invalidFrames: 1 },
     });
   });
 

@@ -4,6 +4,7 @@ import {
   createStreamStats,
   type EventStore,
 } from '@lsv/core';
+import { assertNever } from '@lsv/protocol';
 
 import {
   openStreamSocket,
@@ -97,13 +98,18 @@ export function createStreamWorkerHost(
         post({ type: 'hello', session, stream, limits, expiresAt });
       },
       onBatch(batch) {
-        stats.onBatch(batch.events, batch.dropped ?? 0, now());
+        const { events } = batch;
+        const dropped = batch.dropped ?? 0;
+        const previousEnd = store.end;
         try {
-          store.appendEvents(batch.events);
+          store.appendEvents(events);
+          stats.onBatch(events, dropped, now());
         } catch (error) {
           // `parseServerMessage` lets no hole or unknown level through, so this is a bug, not
-          // input: count the frame as invalid and post the events appended before the bad one.
+          // input. The store keeps the events before the bad one: count those as received (the
+          // rest shows up as a `seq` gap, i.e. missed), count the frame as invalid and post them.
           if (!(error instanceof TypeError)) throw error;
+          stats.onBatch(events.slice(0, store.end - previousEnd), dropped, now());
           stats.onInvalidFrame();
         }
         flush();
@@ -129,6 +135,9 @@ export function createStreamWorkerHost(
       case 'stop':
         if (data.session === session) closeSocket();
         return;
+      default:
+        // A message type added to `ToWorkerMessage` without a case here fails to compile.
+        assertNever(data);
     }
   };
 

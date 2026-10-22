@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeWorker, testBatch, testHello } from '@/shared/lib/testing';
 
 import type { FromWorkerMessage } from '../api/worker-protocol';
-import { createLogStreamStore, PREVIEW_INTERVAL_MS } from './log-stream-store';
+import { createLogStreamStore, MAX_AUTO_RESTARTS, PREVIEW_INTERVAL_MS } from './log-stream-store';
 
 const ENDPOINT = 'ws://localhost:8787/ws';
 
@@ -299,6 +299,74 @@ describe('createLogStreamStore', () => {
     expect(store.getSnapshot().status.phase).toBe('connected');
     store.start();
     expect(store.getSnapshot().error).toBeUndefined();
+  });
+
+  it(`gives up after ${String(MAX_AUTO_RESTARTS)} automatic restarts per start()`, () => {
+    const { store, worker, send } = setup();
+    /** Sends the same rows twice in `session`: the second batch does not continue the replica. */
+    const desync = (session: number): void => {
+      const columns = createSource()([1, 2]);
+      send({ type: 'batch', session, columns, counters: counters() });
+      send({ type: 'batch', session, columns, counters: counters() });
+    };
+
+    for (let restart = 1; restart <= MAX_AUTO_RESTARTS; restart++) desync(restart);
+    expect(worker().messages().at(-1)).toMatchObject({
+      type: 'start',
+      session: MAX_AUTO_RESTARTS + 1,
+    });
+
+    desync(MAX_AUTO_RESTARTS + 1);
+    nextFrame();
+
+    // No further connection: the current one is stopped and the status explains why.
+    expect(worker().messages().at(-1)).toEqual({ type: 'stop', session: MAX_AUTO_RESTARTS + 1 });
+    expect(store.getSnapshot().status).toMatchObject({
+      phase: 'closed',
+      code: 1002,
+      reason: expect.stringMatching(
+        /fell out of step.*gave up after 3 automatic restarts/,
+      ) as unknown,
+    });
+    const starts = worker()
+      .messages()
+      .filter(
+        (message) =>
+          typeof message === 'object' &&
+          message !== null &&
+          'type' in message &&
+          message.type === 'start',
+      );
+    expect(starts).toHaveLength(MAX_AUTO_RESTARTS + 1);
+
+    // A manual start gets a fresh allowance.
+    store.start();
+    desync(MAX_AUTO_RESTARTS + 3);
+    expect(worker().messages().at(-1)).toMatchObject({
+      type: 'start',
+      session: MAX_AUTO_RESTARTS + 4,
+    });
+  });
+
+  it('restarts when a message from the worker cannot be deserialized, within the same cap', () => {
+    const { store, worker, hello } = setup();
+    hello();
+
+    worker().receiveUnreadable();
+    nextFrame();
+
+    expect(worker().messages().at(-1)).toMatchObject({ type: 'start', session: 2 });
+    expect(store.getSnapshot()).toMatchObject({
+      status: { phase: 'connecting' },
+      error: 'Restarted the stream: a message from the stream worker could not be deserialized.',
+    });
+
+    for (let restart = 2; restart <= MAX_AUTO_RESTARTS; restart++) worker().receiveUnreadable();
+    worker().receiveUnreadable();
+    nextFrame();
+
+    expect(store.getSnapshot().status).toMatchObject({ phase: 'closed', code: 1002 });
+    expect(worker().messages().at(-1)).toMatchObject({ type: 'stop' });
   });
 
   it('terminates the worker and publishes nothing more on stop()', () => {

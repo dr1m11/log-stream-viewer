@@ -15,6 +15,7 @@ import { createLogStreamStore } from './log-stream-store';
 function inProcessWorker(): StreamWorker {
   const worker: StreamWorker = {
     onmessage: null,
+    onmessageerror: null,
     onerror: null,
     postMessage(message, options) {
       const data = structuredClone(message, options);

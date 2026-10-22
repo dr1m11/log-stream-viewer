@@ -1,5 +1,5 @@
 import { createEventStore, type EventStore, type StreamCounters } from '@lsv/core';
-import type { LogEvent, StreamLimits, StreamSettings } from '@lsv/protocol';
+import { assertNever, type LogEvent, type StreamLimits, type StreamSettings } from '@lsv/protocol';
 
 import { SOCKET_FAILURE_CODES, type StreamRequest } from '@/shared/api';
 
@@ -95,6 +95,13 @@ export interface LogStreamStore {
 /** The latest-event preview changes at most four times per second, so it stays readable. */
 export const PREVIEW_INTERVAL_MS = 250;
 
+/**
+ * Restarts the store makes on its own per `start()` when the replica can no longer be trusted.
+ * Each one opens a new connection, and the server admits only a few per client IP (then 4029),
+ * so a fault that keeps coming back ends in a closed status instead of a reconnect loop.
+ */
+export const MAX_AUTO_RESTARTS = 3;
+
 const CONNECTING: ConnectionStatus = { phase: 'connecting' };
 const NO_COUNTERS: StreamCounters = {
   received: 0,
@@ -148,8 +155,10 @@ function sameCounters(a: StreamCounters, b: StreamCounters): boolean {
  * evicts on append, so it stays at its capacity.
  *
  * Every `start` opens a new session; messages of an older one are dropped. If a batch does not
- * continue the replica (`appendColumns` throws a `RangeError`), the rows can no longer be trusted
- * to match the worker's, so the store records the error and restarts with a new session.
+ * continue the replica (`appendColumns` throws a `RangeError`) or a message from the worker cannot
+ * be deserialized (`messageerror`), the rows can no longer be trusted to match the worker's, so
+ * the store records the error and restarts with a new session — at most
+ * {@link MAX_AUTO_RESTARTS} times per `start()`, then it reports the stream as closed.
  */
 export function createLogStreamStore(options: LogStreamOptions): LogStreamStore {
   const { endpoint, request, capacity, spawnWorker = spawnStreamWorker } = options;
@@ -165,6 +174,7 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
   let status: ConnectionStatus = CONNECTING;
   let counters = NO_COUNTERS;
   let error: string | undefined;
+  let autoRestarts = 0;
   /** The event the preview shows, and the buffer end it was read at. */
   let preview: LogEvent | undefined;
   let previewEnd = 0;
@@ -259,9 +269,7 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
           buffer.appendColumns(data.columns);
         } catch (failure) {
           if (!(failure instanceof RangeError)) throw failure;
-          error = `The table fell out of step with the stream and restarted it (${failure.message}).`;
-          openSession();
-          schedulePublish();
+          recover(`the table fell out of step with the stream (${failure.message})`);
           return;
         }
         counters = data.counters;
@@ -278,6 +286,32 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
         };
         counters = data.counters;
         break;
+      default:
+        // A message type added to `FromWorkerMessage` without a case here fails to compile.
+        assertNever(data);
+    }
+    schedulePublish();
+  }
+
+  /**
+   * The replica may no longer match the worker's buffer (`problem` says why, in lower case):
+   * restart with a new session, or give up once {@link MAX_AUTO_RESTARTS} are used up.
+   */
+  function recover(problem: string): void {
+    if (autoRestarts >= MAX_AUTO_RESTARTS) {
+      worker?.postMessage({ type: 'stop', session });
+      // Whatever the worker still sends belongs to a session that is over.
+      session++;
+      status = {
+        phase: 'closed',
+        code: SOCKET_FAILURE_CODES.protocolError,
+        reason: `${problem}; gave up after ${String(MAX_AUTO_RESTARTS)} automatic restarts`,
+        wasConnected: status.phase === 'connected',
+      };
+    } else {
+      autoRestarts++;
+      error = `Restarted the stream: ${problem}.`;
+      openSession();
     }
     schedulePublish();
   }
@@ -298,6 +332,7 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
   function terminateWorker(): void {
     if (worker === undefined) return;
     worker.onmessage = null;
+    worker.onmessageerror = null;
     worker.onerror = null;
     worker.terminate();
     worker = undefined;
@@ -319,6 +354,10 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
     if (worker === undefined) {
       worker = spawnWorker();
       worker.onmessage = receive;
+      // Not tied to a session: the message could not be read, so neither could its session.
+      worker.onmessageerror = () => {
+        recover('a message from the stream worker could not be deserialized');
+      };
       worker.onerror = fail;
     }
     worker.postMessage({ type: 'start', session, endpoint, request, capacity });
@@ -335,6 +374,7 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
     start() {
       cancelPending();
       error = undefined;
+      autoRestarts = 0;
       openSession();
       publish();
     },

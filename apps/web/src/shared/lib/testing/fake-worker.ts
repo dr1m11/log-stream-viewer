@@ -44,7 +44,7 @@ export class FakeMessagePort<Receive = unknown, Send = unknown> {
  * Stand-in for the browser `Worker` in unit tests: a {@link FakeMessagePort} as seen from the main
  * thread, plus `onerror` and `terminate()`. Install it with `vi.stubGlobal('Worker', FakeWorker)`
  * or pass `() => new FakeWorker()` where the code takes a worker factory. Nothing runs inside: the
- * test answers for the worker with `receive()` and fails it with `fail()`. Messages are `unknown`:
+ * test answers for the worker with `receive()` and fails it with `receiveUnreadable()` or `fail()`. Messages are `unknown`:
  * the fake fits any message protocol. A terminated worker neither records posts nor delivers
  * messages.
  */
@@ -67,6 +67,7 @@ export class FakeWorker extends FakeMessagePort {
   /** Script URL, when constructed like a real `Worker`. */
   readonly url: string | undefined;
   readonly options: WorkerOptions | undefined;
+  onmessageerror: ((event: MessageEvent) => void) | null = null;
   onerror: ((event: ErrorEvent) => void) | null = null;
   terminated = false;
 
@@ -92,6 +93,11 @@ export class FakeWorker extends FakeMessagePort {
 
   override receive(data: unknown): void {
     if (!this.terminated) super.receive(data);
+  }
+
+  /** A message from the worker arrived but could not be deserialized (`messageerror`). */
+  receiveUnreadable(): void {
+    if (!this.terminated) this.onmessageerror?.(new MessageEvent('messageerror'));
   }
 
   /** The worker failed: an uncaught error, or a script that did not load. */

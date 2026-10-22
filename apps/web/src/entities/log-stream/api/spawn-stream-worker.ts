@@ -2,6 +2,8 @@ import type { FromWorkerMessage, MessageEndpoint, ToWorkerMessage } from './work
 
 /** The main thread's handle on the stream worker: a `Worker`, or a test double. */
 export interface StreamWorker extends MessageEndpoint<FromWorkerMessage, ToWorkerMessage> {
+  /** A message from the worker could not be deserialized. */
+  onmessageerror: ((event: MessageEvent) => void) | null;
   /** The worker failed to load (e.g. blocked by CSP) or threw an uncaught error. */
   onerror: ((event: ErrorEvent) => void) | null;
   terminate(): void;

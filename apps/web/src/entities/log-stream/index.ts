@@ -1,22 +1,10 @@
-export type { StreamWorker } from './api/spawn-stream-worker';
+// Test-facing: lets a test that stubs the global `Worker` answer as the stream worker would.
+export type { FromWorkerMessage } from './api/worker-protocol';
 export type {
-  FromWorkerMessage,
-  MessageEndpoint,
-  ToWorkerMessage,
-  WorkerBatchMessage,
-  WorkerClosedMessage,
-  WorkerCountersMessage,
-  WorkerHelloMessage,
-  WorkerStartMessage,
-  WorkerStopMessage,
-} from './api/worker-protocol';
-export {
-  type ConnectionStatus,
-  createLogStreamStore,
-  type LogBufferView,
-  type LogStreamOptions,
-  type LogStreamSnapshot,
-  type LogStreamStore,
-  PREVIEW_INTERVAL_MS,
+  ConnectionStatus,
+  LogBufferView,
+  LogStreamOptions,
+  LogStreamSnapshot,
+  LogStreamStore,
 } from './model/log-stream-store';
 export { useLogStreamSelector, useLogStreamStore } from './model/use-log-stream';
