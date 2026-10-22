@@ -1,0 +1,27 @@
+# Build context of apps/mock-server/Dockerfile (the only image; `docker build` / `flyctl deploy`
+# from the repository root). An allowlist: everything is excluded except what the image copies,
+# which keeps out node_modules (pnpm junctions on Windows), .git, agent worktrees, .local, .env
+# files and build or test output, and keeps the upload to Fly's builder small.
+# Exceptions name literal paths, no wildcards: the tar walker flyctl uses (moby go-archive) skips
+# an excluded directory unless an exception starts with its literal path.
+*
+
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+
+# Every workspace manifest, so the workspace matches the lockfile's importers.
+!apps/mock-server/package.json
+!apps/web/package.json
+!packages/protocol/package.json
+
+# Docker and flyctl add the Dockerfile back on their own; Fly's docs ask to keep it in the context.
+!apps/mock-server/Dockerfile
+
+# Runtime sources: the server and the workspace packages it imports.
+!apps/mock-server/src
+!packages/protocol/src
+
+# Tests and benchmarks never run in the image.
+**/*.test.ts
+**/*.bench.ts

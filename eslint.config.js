@@ -243,6 +243,22 @@ export default defineConfig(
     },
   },
   {
+    // Tests of the repository tooling run on node:test (`pnpm test:hooks`), not Vitest.
+    files: ['scripts/**/*.test.ts'],
+    rules: {
+      'vitest/no-import-node-test': 'off',
+      // node:test's describe/it return promises that the runner itself awaits.
+      '@typescript-eslint/no-floating-promises': [
+        'error',
+        {
+          allowForKnownSafeCalls: [
+            { from: 'package', package: 'node:test', name: ['describe', 'it', 'suite', 'test'] },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ['apps/web/e2e/**/*.ts'],
     extends: [playwright.configs['flat/recommended']],
   },
