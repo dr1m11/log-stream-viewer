@@ -1,16 +1,28 @@
+import { useLogStreamStore } from '@/entities/log-stream';
 import { ThemeToggle } from '@/features/toggle-theme';
+import { STREAM_URL } from '@/shared/config';
 
-import { useStreamStore } from '../model/use-stream-store';
+import { readBufferCapacity, readStreamRequest } from '../lib/read-stream-request';
 import { ConnectionStatus } from './ConnectionStatus';
 import { LatestEvent } from './LatestEvent';
 import { StreamStats } from './StreamStats';
+
+/** Stream settings and buffer capacity from the page URL (`?rate`, `?scenario`, `?seed`, `?buffer`). */
+function streamOptionsFromUrl() {
+  const { search } = window.location;
+  return {
+    endpoint: STREAM_URL,
+    request: readStreamRequest(search),
+    capacity: readBufferCapacity(search),
+  };
+}
 
 /**
  * The live stream page. It renders once: the stream store lives outside React and each block
  * subscribes to the part of the snapshot it shows.
  */
 export function StreamPage() {
-  const store = useStreamStore();
+  const store = useLogStreamStore(streamOptionsFromUrl);
 
   return (
     <div className="flex min-h-full flex-col">

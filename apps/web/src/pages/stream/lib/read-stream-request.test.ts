@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { readStreamRequest } from './read-stream-request';
+import { readBufferCapacity, readStreamRequest } from './read-stream-request';
 
 describe('readStreamRequest', () => {
   it('reads rate, scenario and seed from the page query', () => {
@@ -23,5 +23,24 @@ describe('readStreamRequest', () => {
 
   it('never lets the page URL choose the protocol version or resume a stream', () => {
     expect(readStreamRequest('?v=99&resume=st_1&after=10&rate=50')).toEqual({ rate: 50 });
+  });
+});
+
+describe('readBufferCapacity', () => {
+  it('reads the buffer capacity from the page query', () => {
+    expect(readBufferCapacity('?rate=500&buffer=250000')).toBe(250_000);
+  });
+
+  it('keeps the default capacity without a usable value', () => {
+    expect(readBufferCapacity('')).toBe(100_000);
+    expect(readBufferCapacity('?buffer=')).toBe(100_000);
+    expect(readBufferCapacity('?buffer=lots')).toBe(100_000);
+  });
+
+  it('clamps the capacity to the supported range', () => {
+    expect(readBufferCapacity('?buffer=10')).toBe(1_000);
+    expect(readBufferCapacity('?buffer=5000000')).toBe(1_000_000);
+    expect(readBufferCapacity('?buffer=1e9')).toBe(1_000_000);
+    expect(readBufferCapacity('?buffer=12345.6')).toBe(12_345);
   });
 });

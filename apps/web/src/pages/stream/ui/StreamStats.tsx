@@ -1,17 +1,23 @@
 import { useId } from 'react';
 
-import type { ConnectionStatus, StreamSnapshot, StreamStore } from '../model/stream-store';
-import { useStreamSelector } from '../model/use-stream-store';
+import {
+  type ConnectionStatus,
+  type LogStreamSnapshot,
+  type LogStreamStore,
+  useLogStreamSelector,
+} from '@/entities/log-stream';
 
 const NUMBER_FORMAT = new Intl.NumberFormat('en-US');
 
 // Each counter selects a number, so a counter that did not change does not re-render.
-const selectReceived = (snapshot: StreamSnapshot): number => snapshot.received;
-const selectEventsPerSecond = (snapshot: StreamSnapshot): number => snapshot.eventsPerSecond;
-const selectMissed = (snapshot: StreamSnapshot): number => snapshot.missed;
-const selectDropped = (snapshot: StreamSnapshot): number => snapshot.dropped;
-const selectInvalidFrames = (snapshot: StreamSnapshot): number => snapshot.invalidFrames;
-const selectStatus = (snapshot: StreamSnapshot): ConnectionStatus => snapshot.status;
+const selectReceived = (snapshot: LogStreamSnapshot): number => snapshot.counters.received;
+const selectEventsPerSecond = (snapshot: LogStreamSnapshot): number =>
+  snapshot.counters.eventsPerSecond;
+const selectMissed = (snapshot: LogStreamSnapshot): number => snapshot.counters.missed;
+const selectDropped = (snapshot: LogStreamSnapshot): number => snapshot.counters.dropped;
+const selectInvalidFrames = (snapshot: LogStreamSnapshot): number =>
+  snapshot.counters.invalidFrames;
+const selectStatus = (snapshot: LogStreamSnapshot): ConnectionStatus => snapshot.status;
 
 /** One counter: a group named by its label ("Events received, group, 1,234"). */
 function Stat({
@@ -19,12 +25,12 @@ function Stat({
   label,
   select,
 }: {
-  store: StreamStore;
+  store: LogStreamStore;
   label: string;
-  select: (snapshot: StreamSnapshot) => number;
+  select: (snapshot: LogStreamSnapshot) => number;
 }) {
   const labelId = useId();
-  const value = useStreamSelector(store, select);
+  const value = useLogStreamSelector(store, select);
   return (
     <div role="group" aria-labelledby={labelId}>
       <div id={labelId} className="text-xs text-fg-muted">
@@ -36,8 +42,8 @@ function Stat({
 }
 
 /** The effective stream settings, once the server has sent them. */
-function StreamSettingsNote({ store }: { store: StreamStore }) {
-  const status = useStreamSelector(store, selectStatus);
+function StreamSettingsNote({ store }: { store: LogStreamStore }) {
+  const status = useLogStreamSelector(store, selectStatus);
   if (status.phase !== 'connected') return null;
   const { scenario, rate, seed } = status.stream;
   return (
@@ -54,7 +60,7 @@ function StreamSettingsNote({ store }: { store: StreamStore }) {
  * frame. Deliberately not a live region: announcing numbers that change many times a second
  * would drown out everything else for screen-reader users.
  */
-export function StreamStats({ store }: { store: StreamStore }) {
+export function StreamStats({ store }: { store: LogStreamStore }) {
   const headingId = useId();
 
   return (

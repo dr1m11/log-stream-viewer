@@ -1,12 +1,12 @@
+import {
+  type ConnectionStatus as Status,
+  type LogStreamSnapshot,
+  type LogStreamStore,
+  useLogStreamSelector,
+} from '@/entities/log-stream';
 import { cn } from '@/shared/lib/cn';
 
 import { describeClose } from '../lib/describe-close';
-import type {
-  ConnectionStatus as Status,
-  StreamSnapshot,
-  StreamStore,
-} from '../model/stream-store';
-import { useStreamSelector } from '../model/use-stream-store';
 
 type Tone = 'pending' | 'ok' | 'stopped';
 
@@ -35,16 +35,21 @@ function present(status: Status): Presentation {
   }
 }
 
-function selectStatus(snapshot: StreamSnapshot): Status {
+function selectStatus(snapshot: LogStreamSnapshot): Status {
   return snapshot.status;
+}
+
+function selectError(snapshot: LogStreamSnapshot): string | undefined {
+  return snapshot.error;
 }
 
 /**
  * Connection status badge. A polite live region, so screen readers announce connection changes;
  * it re-renders only when the status changes, never for the fast counters.
  */
-export function ConnectionStatus({ store }: { store: StreamStore }) {
-  const { tone, label, advice } = present(useStreamSelector(store, selectStatus));
+export function ConnectionStatus({ store }: { store: LogStreamStore }) {
+  const { tone, label, advice } = present(useLogStreamSelector(store, selectStatus));
+  const error = useLogStreamSelector(store, selectError);
 
   return (
     <p role="status" aria-live="polite" className="flex flex-wrap items-center gap-x-2 text-sm">
@@ -54,6 +59,7 @@ export function ConnectionStatus({ store }: { store: StreamStore }) {
       />
       <span className="font-medium">{label}</span>
       {advice !== undefined && <span className="text-fg-muted">{advice}</span>}
+      {error !== undefined && <span className="text-fg-muted">{error}</span>}
     </p>
   );
 }

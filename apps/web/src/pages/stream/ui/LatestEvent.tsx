@@ -1,10 +1,12 @@
 import type { LogEvent, LogLevel } from '@lsv/protocol';
 import { useId } from 'react';
 
+import {
+  type LogStreamSnapshot,
+  type LogStreamStore,
+  useLogStreamSelector,
+} from '@/entities/log-stream';
 import { cn } from '@/shared/lib/cn';
-
-import type { StreamSnapshot, StreamStore } from '../model/stream-store';
-import { useStreamSelector } from '../model/use-stream-store';
 
 const TIME_FORMAT = new Intl.DateTimeFormat('en-GB', {
   hour: '2-digit',
@@ -23,14 +25,14 @@ const LEVEL_CLASSES: Record<LogLevel, string> = {
   fatal: 'text-level-fatal',
 };
 
-function selectLatest(snapshot: StreamSnapshot): LogEvent | undefined {
+function selectLatest(snapshot: LogStreamSnapshot): LogEvent | undefined {
   return snapshot.latest;
 }
 
 /** The newest event: re-renders at most four times per second (`PREVIEW_INTERVAL_MS`). */
-export function LatestEvent({ store }: { store: StreamStore }) {
+export function LatestEvent({ store }: { store: LogStreamStore }) {
   const headingId = useId();
-  const event = useStreamSelector(store, selectLatest);
+  const event = useLogStreamSelector(store, selectLatest);
 
   return (
     <section

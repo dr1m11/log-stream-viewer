@@ -1,3 +1,4 @@
+import { clampBufferCapacity, DEFAULT_BUFFER_CAPACITY } from '@lsv/core';
 import { parseConnectionQuery, PROTOCOL_VERSION } from '@lsv/protocol';
 
 import type { StreamRequest } from '@/shared/api';
@@ -14,4 +15,14 @@ export function readStreamRequest(search: string): StreamRequest {
   if (!parsed.ok) return {};
   const { rate, scenario, seed } = parsed.value.params;
   return { rate, scenario, seed };
+}
+
+/**
+ * Reads the buffer capacity in events from the page URL (`/?buffer=500000`), clamped to the
+ * supported range (`clampBufferCapacity`). Without the parameter, or with a value that is not a
+ * number, the buffer keeps `DEFAULT_BUFFER_CAPACITY` events.
+ */
+export function readBufferCapacity(search: string): number {
+  const text = new URLSearchParams(search).get('buffer')?.trim() ?? '';
+  return text === '' ? DEFAULT_BUFFER_CAPACITY : clampBufferCapacity(Number(text));
 }
