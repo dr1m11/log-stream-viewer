@@ -53,7 +53,7 @@ flowchart LR
 apps/web/              React SPA, Feature-Sliced Design (checked by Steiger)
 apps/mock-server/      Node 24 + ws, runs its TypeScript sources directly (no build step)
 packages/protocol/     log event model and wire messages: the only contract between server and client
-packages/core/         framework-free stream engine: ring buffer, batching, reconnection (from B2)
+packages/core/         framework-free stream engine: columnar ring buffer, column batches, stream stats
 docs/adr/              architecture decision records
 ```
 

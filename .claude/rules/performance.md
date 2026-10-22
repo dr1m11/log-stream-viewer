@@ -8,7 +8,7 @@ paths:
 
 The stream delivers up to 10K+ events per second; the table holds 100K–1M rows at 60 FPS.
 
-- **Outside React.** Incoming events go into a bounded ring buffer (`packages/core`, from B2). React subscribes with `useSyncExternalStore` to a snapshot that changes at most once per animation frame (`requestAnimationFrame` batching), never per event or per batch.
+- **Outside React.** Incoming events go into a bounded columnar ring buffer (`EventStore` from `@lsv/core`, docs/adr/0006) that evicts on append. React subscribes with `useSyncExternalStore` to a snapshot that changes at most once per animation frame (`requestAnimationFrame` batching), never per event or per batch.
 - **Bounded memory.** Every buffer, queue and index has a size limit and a documented eviction policy. Counters and stats are numbers, not arrays.
 - **Off the main thread.** Filtering, substring/regex search and indexing run in a Web Worker. Send batches, not single events; pass large arrays as transferables; cancel stale queries.
 - **No allocations in hot loops.** Avoid per-event closures, spread copies, `Array.prototype` chains and temporary objects in code that runs per event; prefer index loops and preallocated storage.
