@@ -19,6 +19,21 @@ Object.defineProperty(window, 'matchMedia', {
   }),
 });
 
+// jsdom has no ResizeObserver; Radix Tooltip measures its arrow with one. jsdom has no layout
+// either, so there is never a size to report: observing does nothing.
+class ResizeObserverStub implements ResizeObserver {
+  observe(): void {
+    // No layout, nothing to report.
+  }
+  unobserve(): void {
+    // Nothing is observed.
+  }
+  disconnect(): void {
+    // Nothing is observed.
+  }
+}
+if (!('ResizeObserver' in globalThis)) globalThis.ResizeObserver = ResizeObserverStub;
+
 // Vitest globals are off, so Testing Library cannot register its own cleanup.
 afterEach(() => {
   cleanup();

@@ -5,7 +5,10 @@
  *
  * Text colours (fg, fg-muted, accent, success, danger and the level colours) keep at least 4.5:1
  * (WCAG AA for normal text) against both surface and surface-raised, in both themes; the lowest is
- * 5.3:1 (light debug and warn on surface). Re-check after changing any of them.
+ * 5.3:1 (light debug and warn on surface). fg and fg-muted also keep it on surface-muted (5.7:1
+ * light, 6.5:1 dark). Filled controls and badges put surface-raised text on accent, success,
+ * danger or level-warn, which is the same pair the other way round; at 90% opacity (hover) the
+ * lowest is 4.6:1. Re-check after changing any of them.
  */
 
 :root,
@@ -15,6 +18,8 @@
   /* Page background, and panels or the header drawn on top of it. */
   --lsv-surface: oklch(0.975 0.004 265);
   --lsv-surface-raised: oklch(1 0 0);
+  /* Hover fills of buttons, key caps and neutral badges, on either surface. */
+  --lsv-surface-muted: oklch(0.94 0.007 265);
   --lsv-fg: oklch(0.22 0.02 265);
   --lsv-fg-muted: oklch(0.47 0.02 265);
   --lsv-border: oklch(0.89 0.007 265);
@@ -40,6 +45,7 @@
 
   --lsv-surface: oklch(0.16 0.01 265);
   --lsv-surface-raised: oklch(0.215 0.012 265);
+  --lsv-surface-muted: oklch(0.27 0.014 265);
   --lsv-fg: oklch(0.95 0.005 265);
   --lsv-fg-muted: oklch(0.74 0.015 265);
   --lsv-border: oklch(0.33 0.014 265);

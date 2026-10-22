@@ -8,6 +8,7 @@
 @theme inline {
   --color-surface: var(--lsv-surface);
   --color-surface-raised: var(--lsv-surface-raised);
+  --color-surface-muted: var(--lsv-surface-muted);
   --color-fg: var(--lsv-fg);
   --color-fg-muted: var(--lsv-fg-muted);
   --color-border: var(--lsv-border);
