@@ -16,7 +16,8 @@ on:
 permissions:
   contents: read
 
-# One deploy per ref at a time; a newer push waits instead of cancelling a deploy halfway.
+# One deploy per ref at a time; a newer push waits instead of cancelling a deploy halfway. GitHub
+# keeps only the newest pending run, which is safe because `changes` diffs against production.
 concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: false
@@ -29,20 +30,28 @@ jobs:
     outputs:
       server: ${{ steps.filter.outputs.server }}
     steps:
-      # Credentials stay: on a push, paths-filter fetches the commit before the push to diff against.
+      # Full history: the diff below starts at whatever commit production runs, not at this push.
       - uses: actions/checkout@v7
-      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
-        id: filter
         with:
-          filters: |
-            server:
-              - 'apps/mock-server/**'
-              - 'packages/protocol/**'
-              - 'pnpm-lock.yaml'
-              - 'pnpm-workspace.yaml'
-              - 'package.json'
-              - '.dockerignore'
-              - 'scripts/smoke-ws.ts'
+          fetch-depth: 0
+          persist-credentials: false
+      # Compared with the deployed commit (/healthz `version`), so a server change is not lost when
+      # its own run was cancelled while pending or failed and the next push touches other files.
+      # An unreachable server or an unknown version means "deploy".
+      - name: Compare with the deployed commit
+        id: filter
+        run: |
+          deployed="$(curl --fail --silent --show-error --max-time 10 --retry 3 --retry-all-errors \
+            https://log-stream-viewer-mock.fly.dev/healthz | jq -r '.version // empty' || true)"
+          echo "Deployed version: ${deployed:-unknown}"
+          server=true
+          if [[ "$deployed" =~ ^[0-9a-f]{40}$ ]] && git cat-file -e "$deployed^{commit}" 2>/dev/null &&
+            git diff --quiet "$deployed" HEAD -- apps/mock-server packages/protocol pnpm-lock.yaml \
+              pnpm-workspace.yaml package.json .dockerignore scripts/smoke-ws.ts \
+              .github/workflows/deploy.yml >/dev/null; then
+            server=false
+          fi
+          echo "server=$server" | tee -a "$GITHUB_OUTPUT"
 
   server:
     name: Mock server (Fly.io)
