@@ -16,7 +16,7 @@ Available now:
 
 - A Node mock server that generates realistic logs from several services, deterministically from a seed, in three scenarios (`steady`, `error-burst`, `traffic-spike`) at 10 to 5,000 events per second in the demo
 - A versioned wire protocol (JSON batches over WebSocket) shared by server and client as one package, with golden fixtures and a compatibility policy
-- The web app connects on open and shows the connection status, events received and per second, missed and dropped events, and the latest event; stream settings come from the URL (`/?rate=500&scenario=error-burst&seed=42`)
+- The web app connects on open and shows the connection status, events received and per second, missed and dropped events, and a virtualized table of the received events that follows the newest one (keyboard navigable, "Jump to latest" after scrolling up); stream settings come from the URL (`/?rate=500&scenario=error-burst&seed=42`)
 - Server limits that keep a public demo cheap: an Origin allowlist, connection caps per IP and in total, a global event budget, 30-minute sessions, and a machine that suspends when idle
 - Light and dark themes without a flash, a strict Content Security Policy, and a preview deployment for every pull request from a branch of this repository
 
