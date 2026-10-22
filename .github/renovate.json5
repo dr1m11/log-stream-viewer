@@ -19,6 +19,16 @@
   },
   packageRules: [
     {
+      // `pin` would turn `engines.node` (>=24.15.0, enforced by engineStrict) into one exact version.
+      description: 'Keep the Node ranges in engines and .nvmrc as ranges',
+      matchDepTypes: ['engines'],
+      rangeStrategy: 'auto',
+    },
+    {
+      matchManagers: ['nvm'],
+      rangeStrategy: 'replace',
+    },
+    {
       description: 'typescript-eslint supports TypeScript < 6.1 (docs/adr/0002-toolchain-baseline.md)',
       matchPackageNames: ['typescript'],
       allowedVersions: '<6.1.0',
@@ -62,6 +72,7 @@
         'eslint-config-*',
         'eslint-plugin-*',
         '@eslint-react/**',
+        '@vitest/eslint-plugin',
         'globals',
       ],
     },
@@ -94,11 +105,17 @@
       matchManagers: ['github-actions'],
     },
     {
+      // The pnpm catalog (pnpm-workspace.yaml) holds only dev tooling.
       description: 'Low-risk dev tooling updates merge themselves once required checks pass',
-      matchDepTypes: ['devDependencies'],
+      matchDepTypes: ['devDependencies', 'pnpm.catalog.default'],
       matchUpdateTypes: ['minor', 'patch', 'pin', 'digest'],
       automerge: true,
       platformAutomerge: true,
+    },
+    {
+      description: 'Compiler updates get a manual look',
+      matchPackageNames: ['typescript'],
+      automerge: false,
     },
   ],
 }

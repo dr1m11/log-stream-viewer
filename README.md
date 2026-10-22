@@ -18,7 +18,7 @@ Available now:
 - A versioned wire protocol (JSON batches over WebSocket) shared by server and client as one package, with golden fixtures and a compatibility policy
 - The web app connects on open and shows the connection status, events received and per second, missed and dropped events, and the latest event; stream settings come from the URL (`/?rate=500&scenario=error-burst&seed=42`)
 - Server limits that keep a public demo cheap: an Origin allowlist, connection caps per IP and in total, a global event budget, 30-minute sessions, and a machine that suspends when idle
-- Light and dark themes without a flash, a strict Content Security Policy, and a preview deployment for every pull request
+- Light and dark themes without a flash, a strict Content Security Policy, and a preview deployment for every pull request from a branch of this repository
 
 Planned:
 
@@ -65,7 +65,7 @@ docs/adr/              architecture decision records
 
 ## Getting started
 
-Requires Node.js 24 and pnpm 10.
+Requires Node.js 24.15+ and pnpm 10 (the version in `packageManager`, enabled through Corepack).
 
 ```bash
 pnpm install
@@ -99,7 +99,7 @@ Every pull request runs:
 | Lighthouse CI    | Accessibility must score 100; performance, best practices and the script budget are tracked   |
 | Server image     | The Docker image builds, passes `/healthz` and a WebSocket smoke test                         |
 | PR title         | Conventional Commits (the squash-merge commit message), no AI attribution                     |
-| Preview          | A deployed preview URL commented on the PR                                                    |
+| Preview          | A preview URL commented on the PR (not for forks and Renovate)                                |
 
 `main` is protected: changes land only through squash-merged pull requests with green checks. Dependencies are kept current by [Renovate](.github/renovate.json5): grouped weekly updates, pinned action digests, and automerge for minor and patch updates of dev tooling.
 
