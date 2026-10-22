@@ -71,8 +71,8 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup
 
-      # Production builds require an explicit stream URL; this artifact is for the e2e job, which
-      # starts the mock server on localhost:8787.
+      # Production builds require an explicit stream URL; this artifact is for the e2e and
+      # Lighthouse jobs, which start the mock server on localhost:8787.
       - name: Vite production build
         run: pnpm build
         env:
