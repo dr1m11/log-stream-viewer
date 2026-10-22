@@ -5,7 +5,7 @@
 
 ## Context
 
-From stage B2 the client keeps what it receives: a table of 100K rows by default and up to 1M, at 60 FPS, while the mock server pushes up to 10K+ events per second as 20 JSON frames per second ([ADR-0004](./0004-log-event-model-and-wire-protocol-v1.md)). In B1 the main thread owned the socket, parsed every frame and kept only counters and the newest event.
+From stage B2 the client keeps what it receives: a table of 100K rows by default and up to 1M on request, at 60 FPS, while the mock server pushes up to 10K+ events per second as 20 JSON frames per second ([ADR-0004](./0004-log-event-model-and-wire-protocol-v1.md)). In B1 the main thread owned the socket, parsed every frame and kept only counters and the newest event.
 
 Forces:
 
@@ -27,7 +27,7 @@ WebSocket ─▶ [Worker] openStreamSocket → parseServerMessage → StreamStat
                    get-event(position) ─▶ worker → full LogEvent with payload (details)
 ```
 
-**Columnar ring buffer (`EventStore`).** One preallocated column per field, sized to the capacity: `seq` and `ts` in `Float64Array`, `level` as an index into `LOG_LEVELS` in a `Uint8Array`, `service` and `host` as dictionary ids in `Uint16Array`, `message` and `traceId` in preallocated arrays of strings, a `hasPayload` flag in a `Uint8Array`, and `payload` objects only in the worker's store (`keepPayload`). Appending writes into slots in index loops and allocates nothing apart from dictionary entries for new names.
+**Columnar ring buffer (`EventStore`).** One preallocated column per field, sized to the capacity: `seq` and `ts` in `Float64Array`, `level` as an index into `LOG_LEVELS` in a `Uint8Array`, `service` and `host` as dictionary ids in `Uint16Array`, `message` and `traceId` in preallocated arrays of strings, a `hasPayload` flag in a `Uint8Array`, and `payload` objects only in the worker's store (`keepPayload`). Appending writes into slots in index loops and allocates nothing apart from dictionary entries for new names. Input that `parseServerMessage` never produces — a hole in the array, a level outside `LOG_LEVELS` — throws instead of being stored silently, and the store keeps only the events written before it.
 
 **Positions.** Every appended event gets the next position, starting at 0. A store retains `[start, end)`, at most `capacity` events; a position addresses the same event for as long as it is retained, so the table, selection and the details request all use positions. Both threads append the same rows in the same order, so a position means the same event on both sides. `clear()` restarts at 0 and must be done on both sides together (a new session).
 
@@ -37,15 +37,21 @@ WebSocket ─▶ [Worker] openStreamSocket → parseServerMessage → StreamStat
 
 **Column batches.** The worker encodes the rows appended since its previous batch (`takeColumnBatch`) into fresh typed arrays plus string arrays, `firstPosition`, `count` and the new dictionary names. The six typed-array buffers are transferred (`columnBatchTransferables`); only messages and trace ids are cloned. The main thread appends the batch with `appendColumns`.
 
+**Batch size cap.** A batch carries at most `MAX_COLUMN_BATCH_ROWS` (8,192) rows; the worker calls `takeColumnBatch` until it returns `undefined` and posts each batch as its own message. A steady stream never reaches the cap — the server's ceiling of 20,000 events per second is 1,000 events per 50 ms tick — but after a stall (a busy main thread, a throttled tab) the backlog can be the whole capacity. One batch of 1M rows would mean about 22 MB of typed arrays and a million cloned strings, a task of 100 ms or more on each thread; at 8K rows appending, encoding, cloning and replicating a batch takes about 5 ms in total in the benchmark, so the main thread can render between batches.
+
 **Payloads stay in the worker.** They are the largest and least-read part of an event. The table shows that a row has details (`hasPayload`); opening them asks the worker for the full `LogEvent` at a position (`get-event`, T8), which answers `undefined` once the position is evicted.
 
 **Main ↔ worker messages.** A custom set of typed discriminated unions (no library), owned by `entities/log-stream` in `apps/web`. Every message carries a `session` number that the main thread increments on each `start`; messages of an older session are dropped, so a restart never mixes two streams. Requests that expect an answer carry a `requestId`.
 
-**Statistics (`StreamStats`).** Received events, events per second (ten 100 ms buckets, measured from `hello` while the stream is younger than a second), `seq` gaps (`missed`), reported drops and invalid frames run in the worker and travel with each batch and on heartbeats. Time is an argument (`now`); `@lsv/core` uses no clock, timer or animation frame, which ESLint enforces.
+**Statistics (`StreamStats`).** Received events, events per second (ten 100 ms buckets, restarted on every `hello` and measured from it while the stream is younger than a second), `seq` gaps (`missed`), reported drops and invalid frames run in the worker and travel with each batch and on heartbeats. Time is an argument (`now`); `@lsv/core` uses no clock, timer or animation frame, which ESLint enforces.
 
 **UI snapshot per animation frame.** The main thread appends batches as they arrive but publishes a snapshot (connection status, counters, buffer `start`/`end`) at most once per `requestAnimationFrame` through `useSyncExternalStore`. Rows are read from the store by position during render, never copied into React state.
 
-**Capacity.** `DEFAULT_BUFFER_CAPACITY` 100,000 events, bounds `MIN_BUFFER_CAPACITY` 1,000 and `MAX_BUFFER_CAPACITY` 1,000,000; the user picks another value with `?buffer=`, clamped by `clampBufferCapacity`. Both stores get the same clamped value.
+**Reconnects and sessions** (intended default, to be confirmed in B4). A reconnect within a session keeps both stores and their positions — nothing is cleared, the new stream's events are appended after the old ones, and only `StreamStats.onHello` restarts `seq` tracking and the rate window. A new session (the user restarts the stream or changes the capacity) creates new stores on both sides.
+
+**Lockstep failure.** If `appendColumns` throws (a batch out of order or with inconsistent columns), the main-thread host catches the `RangeError`, shows an error state and restarts with a new session instead of rendering rows that may no longer match the worker's.
+
+**Capacity.** `DEFAULT_BUFFER_CAPACITY` 100,000 events, bounds `MIN_BUFFER_CAPACITY` 1,000 and `MAX_BUFFER_CAPACITY` 1,000,000; the user picks another value with `?buffer=`, clamped by `clampBufferCapacity`. Both stores get the same clamped value. 100K is the supported default; 1M is a best-effort upper bound behind the `?buffer=` clamp — about 140 MB on the main thread plus 245 MB in the worker, 385–400 MB for the tab — until the browser measurement (performance baseline in B2's T9, published in B6) confirms it.
 
 **Memory per event** (Node 24, events shaped like the mock server's: ~50-character messages, a trace id and a small payload on three in four events; measured with typed-array backing stores included):
 
@@ -54,15 +60,16 @@ WebSocket ─▶ [Worker] openStreamSocket → parseServerMessage → StreamStat
 | Main thread (`keepPayload: false`) | ~145 B    | ~14 MB      | ~140 MB   |
 | Worker (`keepPayload: true`)       | ~255 B    | ~24 MB      | ~245 MB   |
 
-The fixed columns are 22 bytes per slot; the rest is strings (and payloads in the worker). The browser numbers for 10K / 100K / 1M rows are measured and published in B6.
+The fixed columns are 22 bytes per slot; the rest is strings (and payloads in the worker). The browser numbers for 10K / 100K / 1M rows are measured and published in B6. If GC traces at 1M rows show pauses, the next step is a string-bytes arena for `message` (UTF-8 bytes in a growing `Uint8Array` with offsets, transferable like the other columns, decoded only for visible rows), which removes a million string objects from each heap.
 
-**Measured cost** (`pnpm bench`, `packages/core/src/event-store.bench.ts`, Node 24 on the development machine; indicative, compare rows of one run): appending 500 parsed events takes ~0.03 ms, encoding them ~0.02 ms more, and `appendColumns` of a 500-event batch on the main thread ~0.007 ms. Append, encode and a transferring `structuredClone` of the batch take ~0.3 ms, against ~1.5 ms for a `structuredClone` of the same 500 `LogEvent` objects.
+**Measured cost** (`pnpm bench`, `packages/core/src/event-store.bench.ts`, Node 24 on the development machine; indicative, compare rows of one run): appending 500 freshly parsed events takes ~0.2 ms (~0.04 ms when the same objects are appended again and stay in the CPU cache), encoding them ~0.02 ms more, and `appendColumns` of a 500-event batch on the main thread ~0.006 ms. Append, encode and a transferring `structuredClone` of the batch take ~0.3 ms, against ~1.5 ms for a `structuredClone` of the same 500 `LogEvent` objects. A full 8,192-row batch takes ~5 ms through all four steps.
 
 ## Consequences
 
 - The main thread no longer parses frames; per batch it copies six typed arrays and two string arrays, and per frame it reads only the visible rows.
 - The table and the details view address rows by position, which stays valid until eviction; components must handle an evicted position (`eventAt` returns `undefined`, `has(position)` is false).
-- Both stores must stay in lockstep: same capacity and dictionary cap, batches appended in order, `clear()` on both sides. A batch that starts before the replica's end throws, so a protocol bug surfaces at once instead of corrupting rows.
+- Both stores must stay in lockstep: same capacity and dictionary cap, batches appended in order, `clear()` on both sides. A batch that starts before the replica's end throws, so a protocol bug surfaces at once (and restarts the session) instead of corrupting rows.
+- 1M rows is not a promise yet: it depends on the browser measurement above.
 - Opening a row's details is asynchronous (a round trip to the worker).
 - Strings are held twice, once per thread. That is the price of synchronous rendering on the main thread; the main store is still about 40% smaller than the worker's.
 - B3 filtering and search can run in the same worker against the authoritative store; B4 reconnection stays inside the worker as well.

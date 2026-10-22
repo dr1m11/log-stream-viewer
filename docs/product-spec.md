@@ -31,7 +31,7 @@ Key scenarios:
 
 **Table**
 
-- Virtualized table (TanStack Virtual) for 100K+ rows, up to 1M while paused.
+- Virtualized table (TanStack Virtual) for 100K+ rows; up to 1M (`?buffer=`) as a best-effort target until browser memory measurements confirm it ([ADR-0006](./adr/0006-client-stream-pipeline.md)).
 - Columns: time, level, service, message; configurable column visibility.
 - Search match highlighting; expanding a row shows the full payload.
 
