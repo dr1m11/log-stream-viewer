@@ -1,7 +1,7 @@
 # 0001. Monorepo layout
 
 - Status: Accepted
-- Date: 2026-10-14
+- Date: 2026-10-14 (updated 2026-10-22: `packages/core` created in B2)
 
 ## Context
 
@@ -14,17 +14,17 @@ The event model and the messages between them change together. If each side kept
 
 ## Decision
 
-Use a pnpm workspace with three packages now and one more in B2:
+Use a pnpm workspace with four packages (`packages/core` was added in B2):
 
 - `apps/web` (`@lsv/web`) — the SPA, organised with Feature-Sliced Design (`app → pages → widgets → features → entities → shared`). Steiger checks the structure (`pnpm lint:fsd`).
 - `apps/mock-server` (`@lsv/mock-server`) — Node 24 runs its TypeScript sources directly (type stripping), no build step.
 - `packages/protocol` (`@lsv/protocol`) — the log event model, wire messages, guards, close codes and golden fixtures. Zero dependencies, consumed from source (`exports → ./src/index.ts`).
-- `packages/core` (from B2) — framework-free stream engine: ring buffer, batching, reconnection, filter engine.
+- `packages/core` (`@lsv/core`) — framework-free stream engine shared by the stream worker and the main thread: columnar ring buffer, transferable column batches, stream stats ([ADR-0006](./0006-client-stream-pipeline.md)); reconnection and the filter engine follow in B3–B4. Consumed from source like `protocol`, its only dependency.
 
 Boundaries, enforced by ESLint blocks in `eslint.config.js`:
 
 - `apps/web` and `apps/mock-server` never import each other (neither by package name nor by relative path); they share only `@lsv/protocol`.
-- `packages/*` (protocol now, core from B2) use no React, DOM or Node APIs: imports of `react*`, `ws` and Node built-ins (`node:*` and bare names such as `fs`) are banned, as are browser and Node globals; only tests may use `node:*` modules to read fixtures. Their tsconfigs have no DOM lib, so browser APIs do not type-check either.
+- `packages/*` (protocol, core) use no React, DOM or Node APIs: imports of `react*`, `ws` and Node built-ins (`node:*` and bare names such as `fs`) are banned, as are browser and Node globals; only tests may use `node:*` modules to read fixtures. Their tsconfigs have no DOM lib, so browser APIs do not type-check either.
 - `packages/*` never import the apps (by package name or by a relative path into `apps/`); dependencies point from apps to packages only.
 - Every package is `"type": "module"`. Relative imports in `packages/*` and `apps/mock-server` end in `.ts` (`NodeNext` + `allowImportingTsExtensions`) and use erasable syntax only, so Node can run them without a build.
 
@@ -35,8 +35,8 @@ The original project brief called the shared package `packages/shared`. It is na
 ## Consequences
 
 - A protocol change touches types, guards, fixtures, server and client in one PR (`/protocol-change`); type errors show drift at compile time on both sides.
-- Coverage gates apply per package (`protocol` 90%, `mock-server` 80%), so UI code does not dilute the domain metric.
-- FSD slices in `apps/web` stay thin: they adapt `@lsv/protocol` and later `packages/core` to React.
+- Coverage gates apply per package (`protocol` and `core` 90%, `mock-server` 80%), so UI code does not dilute the domain metric.
+- FSD slices in `apps/web` stay thin: they adapt `@lsv/protocol` and `@lsv/core` to React.
 - Source-first packages mean every consumer must compile or strip TypeScript; Vite, Vitest and Node 24 all do. The server's Docker image must keep workspace packages as symlinks (Node refuses to strip types inside `node_modules`).
 - A little more configuration than a single app: workspace file, per-package tsconfig and scripts.
 

@@ -2,7 +2,7 @@ import { defineConfig } from 'vitest/config';
 
 /**
  * One Vitest project per workspace package, added by the package itself when it is created:
- * `protocol`, `mock-server` and `web-build` (node) inline, `web` (jsdom) through
+ * `protocol`, `core`, `mock-server` and `web-build` (node) inline, `web` (jsdom) through
  * `apps/web/vitest.config.ts`.
  * The node:test suites of .claude/hooks and scripts run with `pnpm test:hooks`, not Vitest.
  */
@@ -13,6 +13,14 @@ export default defineConfig({
         test: {
           name: 'protocol',
           root: './packages/protocol',
+          include: ['src/**/*.test.ts'],
+          environment: 'node',
+        },
+      },
+      {
+        test: {
+          name: 'core',
+          root: './packages/core',
           include: ['src/**/*.test.ts'],
           environment: 'node',
         },
@@ -59,6 +67,7 @@ export default defineConfig({
       // Threshold globs always match paths relative to the repository root.
       thresholds: {
         'packages/protocol/src/**': { lines: 90, functions: 90, branches: 90, statements: 90 },
+        'packages/core/src/**': { lines: 90, functions: 90, branches: 90, statements: 90 },
         'apps/mock-server/src/**': { lines: 80, functions: 80, branches: 80, statements: 80 },
       },
     },

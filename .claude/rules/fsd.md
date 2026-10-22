@@ -12,6 +12,6 @@ paths:
 - Each slice exposes a public API in `index.ts` that re-exports only what other layers consume. Never deep-import another slice (`@/features/x/model/store` ✗ → `@/features/x` ✓).
 - No imports between slices of the same layer. If two features need the same thing, move it down (entity or shared). Cross-entity `@x` imports are not used.
 - Segments are named by purpose, not by kind (`app/error-handling` ✓; `providers`, `components`, `hooks`, `types` ✗ — Steiger rule `segments-by-purpose`). `app/` has no `ui` segment; global styles live in `app/styles`.
-- Stream and domain logic (buffer, batching, reconnection, filtering) belongs in `packages/core` (from B2); the wire format comes from `@lsv/protocol`. Slices adapt them to React (stores, hooks, components).
+- Stream and domain logic (buffer, batching, reconnection, filtering) belongs in `packages/core` (`@lsv/core`, docs/adr/0006); the wire format comes from `@lsv/protocol`. Slices adapt them to React (stores, hooks, components).
 - Use the `@/` alias for cross-layer imports and relative imports inside a slice.
 - After structural changes run `pnpm lint:fsd` and fix every finding.

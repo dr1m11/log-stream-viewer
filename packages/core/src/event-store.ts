@@ -1,0 +1,396 @@
+import { type JsonValue, LOG_LEVELS, type LogEvent, type LogLevel } from '@lsv/protocol';
+
+import type { ColumnBatch } from './column-batch.ts';
+import { createStringDictionary, DEFAULT_DICTIONARY_CAPACITY } from './string-dictionary.ts';
+
+type Payload = Readonly<Record<string, JsonValue>>;
+
+/** Read once: a module runner may turn every read of an imported binding into a getter call. */
+const LEVELS: readonly LogLevel[] = LOG_LEVELS;
+/** Level name → index in `LOG_LEVELS`, the code stored in the `level` column. */
+const LEVEL_CODES = new Map<string, number>(LEVELS.map((name, code) => [name, code]));
+
+/**
+ * Most rows one column batch carries. A steady stream never reaches it: the server's ceiling of
+ * 20,000 events per second is 1,000 events per 50 ms tick. After a stall (a busy main thread, a
+ * throttled tab) the backlog can reach the whole capacity, up to 1M rows; cut into batches of this
+ * size, each `postMessage` and `appendColumns` stays a task of a few milliseconds instead of one
+ * task that blocks both threads for 100 ms or more (`pnpm bench`: appending, encoding, cloning
+ * and replicating an 8K-row batch takes about 5 ms in total).
+ */
+export const MAX_COLUMN_BATCH_ROWS = 8192;
+
+export interface EventStoreOptions {
+  /** Hard limit of retained events; appending past it evicts the oldest ones. A positive integer. */
+  readonly capacity: number;
+  /**
+   * Whether to keep `payload` objects. The worker's store keeps them (the details view fetches
+   * them on demand); the main thread's store only keeps the `hasPayload` flag.
+   */
+  readonly keepPayload: boolean;
+  /**
+   * Distinct services and hosts each dictionary holds before mapping new names to
+   * `DICTIONARY_OVERFLOW_ID`. Two stores that exchange column batches must use the same value.
+   * Default {@link DEFAULT_DICTIONARY_CAPACITY}.
+   */
+  readonly dictionaryCapacity?: number;
+}
+
+/**
+ * A bounded columnar ring buffer of log events (docs/adr/0006).
+ *
+ * **Positions.** Every appended event gets the next position, starting at 0; positions only grow
+ * (until {@link EventStore.clear}). The store retains `[start, end)`: `end` is the position the
+ * next event gets, and `size = end - start` never exceeds `capacity`. A position addresses the same
+ * event for as long as it is retained, and two stores fed through column batches agree on it.
+ *
+ * **Eviction.** Appending past `capacity` overwrites the oldest events during the append itself;
+ * no reader has to drain the buffer (a background tab pauses `requestAnimationFrame`, and memory
+ * must stay bounded anyway).
+ *
+ * **Row accessors** (`seqAt`, `messageAt`, …) do not check their position, so that rendering
+ * visible rows costs a modulo and an array read: call them only for retained positions
+ * (`has(position)`, or a `start`/`end` range read in the same task as the rows). For any other
+ * position they return whatever the slot holds. {@link EventStore.eventAt} does check.
+ */
+export interface EventStore {
+  readonly capacity: number;
+  readonly keepPayload: boolean;
+  /** Position of the oldest retained event (inclusive). */
+  readonly start: number;
+  /** Position the next appended event gets (exclusive end of the retained range). */
+  readonly end: number;
+  /** Retained events: `end - start`. */
+  readonly size: number;
+  /** Whether `position` is retained. */
+  readonly has: (position: number) => boolean;
+  readonly seqAt: (position: number) => number;
+  readonly tsAt: (position: number) => number;
+  readonly levelAt: (position: number) => LogLevel;
+  readonly serviceAt: (position: number) => string;
+  readonly hostAt: (position: number) => string;
+  readonly messageAt: (position: number) => string;
+  readonly traceIdAt: (position: number) => string | undefined;
+  /** Whether the event has a payload, also in a store that does not keep payloads. */
+  readonly hasPayloadAt: (position: number) => boolean;
+  /**
+   * The event at `position` as a `LogEvent` (a new object), or `undefined` when the position is
+   * not retained. It allocates: use it for on-demand details, not in the row loop. `payload` is present only in a store with `keepPayload` that received the event
+   * through {@link EventStore.appendEvents}.
+   */
+  readonly eventAt: (position: number) => LogEvent | undefined;
+  /**
+   * Appends parsed events (the worker side). Evicts the oldest events beyond `capacity`. A hole in
+   * the array or a level outside `LOG_LEVELS` (`parseServerMessage` lets neither through) throws a
+   * `TypeError`: the events before it stay appended, and no slot that was not written is retained.
+   */
+  readonly appendEvents: (events: readonly LogEvent[]) => void;
+  /**
+   * Appends a batch encoded by another store's {@link EventStore.takeColumnBatch} (the main-thread
+   * side), so this store retains the same rows at the same positions. Batches must arrive in the
+   * order they were taken: a batch that starts before `end` throws a `RangeError`. A batch that
+   * starts after `end` means the source evicted the rows in between before they were taken; this
+   * store drops everything before the batch as well.
+   */
+  readonly appendColumns: (batch: ColumnBatch) => void;
+  /**
+   * Encodes up to `maxRows` (default {@link MAX_COLUMN_BATCH_ROWS}) of the rows appended since the
+   * previous batch — only those still retained, oldest first — together with the dictionary
+   * entries added since then, or returns `undefined` when there are no new rows. Call it until it
+   * returns `undefined` to send a whole backlog. The batch owns fresh buffers, ready to be
+   * transferred (`columnBatchTransferables`).
+   */
+  readonly takeColumnBatch: (maxRows?: number) => ColumnBatch | undefined;
+  /**
+   * Drops every event and dictionary entry and restarts positions at 0 (a new session). A store
+   * that receives this store's batches must be cleared at the same time.
+   */
+  readonly clear: () => void;
+}
+
+/** The part of the typed-array API the column copies use; every column type has it. */
+interface TypedColumn {
+  set(array: ArrayLike<number>, offset?: number): void;
+  subarray(begin?: number, end?: number): ArrayLike<number>;
+}
+
+// Column reads go through these helpers: slots are always in range, and the fallbacks exist only
+// to satisfy `noUncheckedIndexedAccess`.
+function numberAt(column: ArrayLike<number>, slot: number): number {
+  return column[slot] ?? 0;
+}
+
+function stringAt(column: readonly string[], slot: number): string {
+  return column[slot] ?? '';
+}
+
+function levelName(code: number): LogLevel {
+  return LEVELS[code] ?? 'info';
+}
+
+/**
+ * A preallocated array built by pushing: `new Array(n)` starts HOLEY in V8 and stays holey even
+ * after `fill`, which costs a hole check on every read.
+ */
+function packedArray<T>(length: number, value: T): T[] {
+  const array: T[] = [];
+  for (let index = 0; index < length; index++) array.push(value);
+  return array;
+}
+
+export function createEventStore(options: EventStoreOptions): EventStore {
+  const { capacity, keepPayload, dictionaryCapacity = DEFAULT_DICTIONARY_CAPACITY } = options;
+  if (!Number.isInteger(capacity) || capacity < 1) {
+    throw new RangeError('Event store capacity must be a positive integer');
+  }
+
+  // One slot per retained event; position p lives in slot p % capacity. All columns are allocated
+  // up front, so appending never allocates (apart from dictionary entries for new names).
+  const seq = new Float64Array(capacity);
+  const ts = new Float64Array(capacity);
+  const level = new Uint8Array(capacity);
+  const service = new Uint16Array(capacity);
+  const host = new Uint16Array(capacity);
+  const hasPayload = new Uint8Array(capacity);
+  const message = packedArray<string>(capacity, '');
+  const traceId = packedArray<string | undefined>(capacity, undefined);
+  const payload = packedArray<Payload | undefined>(keepPayload ? capacity : 0, undefined);
+  const services = createStringDictionary(dictionaryCapacity);
+  const hosts = createStringDictionary(dictionaryCapacity);
+
+  let start = 0;
+  let end = 0;
+  // What takeColumnBatch has already encoded: rows before `taken`, dictionary ids up to these sizes.
+  let taken = 0;
+  let takenServices = 0;
+  let takenHosts = 0;
+
+  const has = (position: number): boolean => position >= start && position < end;
+
+  /** Moves `end` forward by `count` positions and evicts what no longer fits. */
+  function advance(count: number): void {
+    end += count;
+    if (end - start > capacity) start = end - capacity;
+  }
+
+  /** Copies `rows` values from `source[from…]` into the ring column starting at `slot`, wrapping. */
+  function copyIn(
+    target: TypedColumn,
+    source: TypedColumn,
+    from: number,
+    slot: number,
+    rows: number,
+  ): void {
+    const head = Math.min(rows, capacity - slot);
+    target.set(source.subarray(from, from + head), slot);
+    if (head < rows) target.set(source.subarray(from + head, from + rows), 0);
+  }
+
+  /** Copies `rows` values of the ring column starting at `slot`, wrapping, into `target[0…]`. */
+  function copyOut(source: TypedColumn, target: TypedColumn, slot: number, rows: number): void {
+    const head = Math.min(rows, capacity - slot);
+    target.set(source.subarray(slot, slot + head), 0);
+    if (head < rows) target.set(source.subarray(0, rows - head), head);
+  }
+
+  function appendEvents(events: readonly LogEvent[]): void {
+    const total = events.length;
+    if (total === 0) return;
+    // Of an oversized batch only the newest `capacity` events would survive; skip the others.
+    const skip = total > capacity ? total - capacity : 0;
+    const previousEnd = end;
+    let slot = (end + skip) % capacity;
+
+    /** Rejects `events[index]`: keeps the events written before it and nothing unwritten. */
+    function reject(index: number, reason: string): TypeError {
+      advance(index);
+      // The skipped positions were never written, so the retained range starts after them.
+      if (skip > 0) start = Math.max(start, previousEnd + skip);
+      return new TypeError(reason);
+    }
+
+    for (let index = skip; index < total; index++) {
+      const event = events[index];
+      if (event === undefined) throw reject(index, 'Event arrays must not have holes');
+      const code = LEVEL_CODES.get(event.level);
+      if (code === undefined) throw reject(index, `Unknown log level ${event.level}`);
+      seq[slot] = event.seq;
+      ts[slot] = event.ts;
+      level[slot] = code;
+      service[slot] = services.intern(event.service);
+      host[slot] = hosts.intern(event.host);
+      message[slot] = event.message;
+      traceId[slot] = event.traceId;
+      hasPayload[slot] = event.payload === undefined ? 0 : 1;
+      if (keepPayload) payload[slot] = event.payload;
+      slot++;
+      if (slot === capacity) slot = 0;
+    }
+    advance(total);
+  }
+
+  function appendColumns(batch: ColumnBatch): void {
+    const { firstPosition, count } = batch;
+    if (!Number.isInteger(firstPosition) || firstPosition < end) {
+      throw new RangeError(
+        `Column batch starts at ${String(firstPosition)}, before the store's end ${String(end)}`,
+      );
+    }
+    if (
+      batch.seq.length !== count ||
+      batch.ts.length !== count ||
+      batch.level.length !== count ||
+      batch.service.length !== count ||
+      batch.host.length !== count ||
+      batch.hasPayload.length !== count ||
+      batch.message.length !== count ||
+      batch.traceId.length !== count
+    ) {
+      throw new RangeError('Every column of a batch must hold `count` rows');
+    }
+    for (const name of batch.newServices) services.intern(name);
+    for (const name of batch.newHosts) hosts.intern(name);
+    if (firstPosition > end) {
+      // The source evicted the rows in between before encoding them, and with them all older rows.
+      start = firstPosition;
+      end = firstPosition;
+    }
+    const skip = count > capacity ? count - capacity : 0;
+    const rows = count - skip;
+    const firstSlot = (firstPosition + skip) % capacity;
+    copyIn(seq, batch.seq, skip, firstSlot, rows);
+    copyIn(ts, batch.ts, skip, firstSlot, rows);
+    copyIn(level, batch.level, skip, firstSlot, rows);
+    copyIn(service, batch.service, skip, firstSlot, rows);
+    copyIn(host, batch.host, skip, firstSlot, rows);
+    copyIn(hasPayload, batch.hasPayload, skip, firstSlot, rows);
+    let slot = firstSlot;
+    for (let index = skip; index < count; index++) {
+      message[slot] = stringAt(batch.message, index);
+      traceId[slot] = batch.traceId[index];
+      // Payloads stay with the source; a store that keeps them must not show a stale one here.
+      if (keepPayload) payload[slot] = undefined;
+      slot++;
+      if (slot === capacity) slot = 0;
+    }
+    advance(count);
+  }
+
+  function takeColumnBatch(maxRows = MAX_COLUMN_BATCH_ROWS): ColumnBatch | undefined {
+    if (!Number.isInteger(maxRows) || maxRows < 1) {
+      throw new RangeError('maxRows must be a positive integer');
+    }
+    const firstPosition = Math.max(taken, start);
+    const count = Math.min(end - firstPosition, maxRows);
+    if (count <= 0) return undefined;
+    const firstSlot = firstPosition % capacity;
+
+    const batch = {
+      firstPosition,
+      count,
+      seq: new Float64Array(count),
+      ts: new Float64Array(count),
+      level: new Uint8Array(count),
+      service: new Uint16Array(count),
+      host: new Uint16Array(count),
+      message: new Array<string>(count),
+      traceId: new Array<string | undefined>(count),
+      hasPayload: new Uint8Array(count),
+      newServices: new Array<string>(services.size - takenServices),
+      newHosts: new Array<string>(hosts.size - takenHosts),
+    };
+    copyOut(seq, batch.seq, firstSlot, count);
+    copyOut(ts, batch.ts, firstSlot, count);
+    copyOut(level, batch.level, firstSlot, count);
+    copyOut(service, batch.service, firstSlot, count);
+    copyOut(host, batch.host, firstSlot, count);
+    copyOut(hasPayload, batch.hasPayload, firstSlot, count);
+    let slot = firstSlot;
+    for (let index = 0; index < count; index++) {
+      batch.message[index] = stringAt(message, slot);
+      batch.traceId[index] = traceId[slot];
+      slot++;
+      if (slot === capacity) slot = 0;
+    }
+    // Dictionary ids start at 1 (0 is the overflow id), so entry n has id n.
+    for (let index = 0; index < batch.newServices.length; index++) {
+      batch.newServices[index] = services.stringOf(takenServices + index + 1);
+    }
+    for (let index = 0; index < batch.newHosts.length; index++) {
+      batch.newHosts[index] = hosts.stringOf(takenHosts + index + 1);
+    }
+
+    taken = firstPosition + count;
+    takenServices = services.size;
+    takenHosts = hosts.size;
+    return batch;
+  }
+
+  const seqAt = (position: number): number => numberAt(seq, position % capacity);
+  const tsAt = (position: number): number => numberAt(ts, position % capacity);
+  const levelAt = (position: number): LogLevel => levelName(numberAt(level, position % capacity));
+  const serviceAt = (position: number): string =>
+    services.stringOf(numberAt(service, position % capacity));
+  const hostAt = (position: number): string => hosts.stringOf(numberAt(host, position % capacity));
+  const messageAt = (position: number): string => stringAt(message, position % capacity);
+  const traceIdAt = (position: number): string | undefined => traceId[position % capacity];
+  const hasPayloadAt = (position: number): boolean => hasPayload[position % capacity] === 1;
+
+  function eventAt(position: number): LogEvent | undefined {
+    if (!has(position)) return undefined;
+    const trace = traceIdAt(position);
+    const details = keepPayload ? payload[position % capacity] : undefined;
+    return {
+      seq: seqAt(position),
+      ts: tsAt(position),
+      level: levelAt(position),
+      service: serviceAt(position),
+      host: hostAt(position),
+      message: messageAt(position),
+      ...(trace !== undefined && { traceId: trace }),
+      ...(details !== undefined && { payload: details }),
+    };
+  }
+
+  function clear(): void {
+    start = 0;
+    end = 0;
+    taken = 0;
+    takenServices = 0;
+    takenHosts = 0;
+    services.clear();
+    hosts.clear();
+    // Release the strings and payloads; the typed columns are overwritten before they are read.
+    message.fill('');
+    traceId.fill(undefined);
+    payload.fill(undefined);
+  }
+
+  return {
+    capacity,
+    keepPayload,
+    get start() {
+      return start;
+    },
+    get end() {
+      return end;
+    },
+    get size() {
+      return end - start;
+    },
+    has,
+    seqAt,
+    tsAt,
+    levelAt,
+    serviceAt,
+    hostAt,
+    messageAt,
+    traceIdAt,
+    hasPayloadAt,
+    eventAt,
+    appendEvents,
+    appendColumns,
+    takeColumnBatch,
+    clear,
+  };
+}

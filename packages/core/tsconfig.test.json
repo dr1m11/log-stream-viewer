@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.lib.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.test.tsbuildinfo",
+    // Tests and benchmarks run under Vitest in Node.
+    "types": ["node"]
+  },
+  "include": ["src/**/*.test.ts", "src/**/*.bench.ts"],
+  "exclude": []
+}

@@ -27,7 +27,7 @@ Product scope: `docs/product-spec.md`. Stages and current stage: `docs/roadmap.m
 - `apps/web` — React 19 SPA, Feature-Sliced Design. Deployed to Cloudflare Workers static assets.
 - `apps/mock-server` — Node 24 + `ws`, runs TypeScript natively (no build). Deployed to Fly.io (Docker).
 - `packages/protocol` — log event model and wire messages; the only contract between server and client.
-- `packages/core` (from B2) — framework-free stream engine: ring buffer, batching, reconnection, filter engine.
+- `packages/core` — framework-free stream engine used by the stream worker and the main thread: columnar ring buffer, transferable column batches, stream stats (ADR-0006); reconnection and the filter engine join it in B3–B4.
 
 ## Architecture rules
 

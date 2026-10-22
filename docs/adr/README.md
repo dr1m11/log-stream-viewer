@@ -10,3 +10,4 @@ Create a new one from [`template.md`](./template.md) with the next four-digit nu
 | [0003](./0003-hosting.md)                              | Hosting: mock server on Fly.io, web app on Cloudflare Workers               | Accepted |
 | [0004](./0004-log-event-model-and-wire-protocol-v1.md) | Log event model and wire protocol v1                                        | Accepted |
 | [0005](./0005-mock-server.md)                          | Mock server: Node 24 native TypeScript, ws, deterministic generator, limits | Accepted |
+| [0006](./0006-client-stream-pipeline.md)               | Client stream pipeline                                                      | Accepted |

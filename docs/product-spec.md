@@ -31,7 +31,7 @@ Key scenarios:
 
 **Table**
 
-- Virtualized table (TanStack Virtual) for 100K+ rows, up to 1M while paused.
+- Virtualized table (TanStack Virtual) for 100K+ rows; up to 1M (`?buffer=`) as a best-effort target until browser memory measurements confirm it ([ADR-0006](./adr/0006-client-stream-pipeline.md)).
 - Columns: time, level, service, message; configurable column visibility.
 - Search match highlighting; expanding a row shows the full payload.
 
@@ -65,7 +65,7 @@ React 19, TypeScript, Vite, TanStack Virtual, Zustand, uPlot, Web Workers, Node 
 
 ## 6. Architecture guidelines
 
-- pnpm monorepo: `apps/web` (client), `apps/mock-server` (Node + ws), `packages/protocol` (event model and wire protocol shared by both); a framework-free `packages/core` (buffer, batching, reconnection, filter engine) arrives with the stream stage.
+- pnpm monorepo: `apps/web` (client), `apps/mock-server` (Node + ws), `packages/protocol` (event model and wire protocol shared by both); a framework-free `packages/core` (buffer, batching, stream stats; reconnection and filter engine later) shared by the stream worker and the main thread.
 - The client follows Feature-Sliced Design; Steiger checks layer boundaries in CI.
 - Transport, buffer and filtering are plain TypeScript, tested in isolation.
 - Hosting: the client on Cloudflare Workers, the mock server on Fly.io.
@@ -84,5 +84,5 @@ Collecting real logs from external systems, server-side storage, authentication,
 
 ## 9. Open questions
 
-- Comlink or a custom message protocol for the worker (decided in stage B3).
+- ~~Comlink or a custom message protocol for the worker~~ — decided in B2: a custom typed message protocol ([ADR-0006](./adr/0006-client-stream-pipeline.md)).
 - Loading a log file in addition to the live stream (stretch goal after B6).
