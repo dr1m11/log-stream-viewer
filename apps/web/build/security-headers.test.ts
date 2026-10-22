@@ -61,6 +61,7 @@ describe('_headers file', () => {
 
   it.each([
     ['a placeholder', '/movies/:title\n  X-Test: 1'],
+    ['two splats', '/*/assets/*\n  X-Test: 1'],
     ['an absolute URL', 'https://example.com/*\n  X-Test: 1'],
     ['a header removal', '/*\n  ! X-Test'],
     ['a header before any path', '  X-Test: 1'],

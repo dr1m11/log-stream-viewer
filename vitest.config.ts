@@ -43,7 +43,13 @@ export default defineConfig({
       // project's root when `--project` filters the run (see `isIncluded` in Vitest's coverage
       // provider), so both forms are listed. A pattern that matches nothing makes the thresholds
       // pass vacuously — check the report lists the package's files after changing these.
-      include: ['packages/*/src/**/*.ts', 'apps/*/src/**/*.{ts,tsx}', 'src/**/*.{ts,tsx}'],
+      include: [
+        'packages/*/src/**/*.ts',
+        'apps/*/src/**/*.{ts,tsx}',
+        'apps/web/build/**/*.ts',
+        'src/**/*.{ts,tsx}',
+        'build/**/*.ts',
+      ],
       exclude: ['**/*.{test,bench}.{ts,tsx}', '**/index.ts', '**/src/main.{ts,tsx}'],
       reporter: ['text', 'html', 'json-summary', 'json'],
       reportOnFailure: true,

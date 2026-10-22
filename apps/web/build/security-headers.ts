@@ -86,9 +86,10 @@ export function parseHeadersFile(text: string): HeaderRule[] {
     const where = `${HEADERS_FILE} line ${String(index + 1)}`;
 
     if (!/^\s/.test(line)) {
-      if (!content.startsWith('/') || content.includes(':')) {
+      // Cloudflare allows one splat per pattern and drops rules with more.
+      if (!content.startsWith('/') || content.includes(':') || content.split('*').length > 2) {
         throw new Error(
-          `${where}: expected a path pattern such as /assets/*, got ${JSON.stringify(content)}`,
+          `${where}: expected a path pattern with at most one * such as /assets/*, got ${JSON.stringify(content)}`,
         );
       }
       rules.push({ path: content, headers: [] });
