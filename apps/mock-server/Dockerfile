@@ -19,6 +19,7 @@ RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/mock-server/package.json apps/mock-server/
 COPY apps/web/package.json apps/web/
+COPY packages/core/package.json packages/core/
 COPY packages/protocol/package.json packages/protocol/
 # Not `pnpm deploy`: it copies @lsv/protocol into node_modules, where Node refuses to strip types.
 # A filtered install links the workspace package instead, so Node loads it from packages/protocol.

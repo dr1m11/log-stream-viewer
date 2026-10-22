@@ -13,6 +13,7 @@
 # Every workspace manifest, so the workspace matches the lockfile's importers.
 !apps/mock-server/package.json
 !apps/web/package.json
+!packages/core/package.json
 !packages/protocol/package.json
 
 # Docker and flyctl add the Dockerfile back on their own; Fly's docs ask to keep it in the context.
