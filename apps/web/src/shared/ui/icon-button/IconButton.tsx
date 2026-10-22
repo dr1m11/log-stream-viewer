@@ -1,4 +1,4 @@
-import { Fragment } from 'react';
+import { Fragment, type MouseEvent } from 'react';
 
 import { Button, type ButtonProps } from '@/shared/ui/button';
 import { Kbd } from '@/shared/ui/kbd';
@@ -12,14 +12,28 @@ export interface IconButtonProps extends Omit<ButtonProps, 'size' | 'aria-label'
   tooltipSide?: TooltipProps['side'];
 }
 
-/** Square icon-only button with a required label and a matching tooltip. */
+/**
+ * Square icon-only button with a required label and a matching tooltip.
+ *
+ * `disabled` is rendered as `aria-disabled`, not the native attribute: a natively disabled button
+ * gets no hover or focus, so its tooltip, the only visible name of an icon, could never be shown.
+ * It stays in the tab order, is announced as dimmed, and its clicks are swallowed.
+ */
 export function IconButton({
   label,
   shortcut = [],
   tooltipSide = 'bottom',
   variant = 'ghost',
+  disabled = false,
+  onClick,
   ...props
 }: IconButtonProps) {
+  const handleClick = disabled
+    ? (event: MouseEvent<HTMLButtonElement>) => {
+        event.preventDefault();
+      }
+    : onClick;
+
   // The spaces only separate the words of the tooltip's text: flex layout drops them.
   const content =
     shortcut.length === 0 ? (
@@ -29,7 +43,9 @@ export function IconButton({
         {label}{' '}
         <span className="flex gap-0.5">
           {shortcut.map((key, index) => (
-            <Fragment key={key}>
+            // A static list that may repeat a key (['G', 'G']): the index is the stable identity.
+            // eslint-disable-next-line @eslint-react/no-array-index-key
+            <Fragment key={index}>
               {index > 0 && ' '}
               <Kbd>{key}</Kbd>
             </Fragment>
@@ -40,7 +56,14 @@ export function IconButton({
 
   return (
     <Tooltip content={content} side={tooltipSide}>
-      <Button {...props} variant={variant} size="icon" aria-label={label} />
+      <Button
+        {...props}
+        variant={variant}
+        size="icon"
+        aria-label={label}
+        aria-disabled={disabled || undefined}
+        onClick={handleClick}
+      />
     </Tooltip>
   );
 }

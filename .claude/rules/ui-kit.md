@@ -7,8 +7,8 @@ paths:
 
 ## Which component
 
-- `Button` (`@/shared/ui/button`) — any control with visible text. Variants: `primary` (the one main action of a group, e.g. "Jump to latest"), `secondary` (default), `ghost` (toolbars, low emphasis), `danger` (destructive: clear the buffer). Sizes `sm`, `md`; `asChild` renders a link with button styles.
-- `IconButton` (`@/shared/ui/icon-button`) — icon-only control (pause, settings, close details). `label` is required: it is the accessible name and the tooltip. `shortcut={['Space']}` adds the keys to the tooltip. Do not wrap an `IconButton` in another `Tooltip`.
+- `Button` (`@/shared/ui/button`) — any control with visible text. Variants: `primary` (the one main action of a group, e.g. "Jump to latest"), `secondary` (default), `ghost` (toolbars, low emphasis), `danger` (destructive: clear the buffer). Sizes `sm`, `md`; `asChild` renders a link with button styles. Size `icon` exists for `IconButton`: never build an icon-only control from `Button` directly, it would compile without an accessible name.
+- `IconButton` (`@/shared/ui/icon-button`) — icon-only control (pause, settings, close details). `label` is required: it is the accessible name and the tooltip. `shortcut={['Space']}` adds the keys to the tooltip. Do not wrap an `IconButton` in another `Tooltip`. Its `disabled` renders `aria-disabled` (focusable, clicks swallowed) so the tooltip, its only visible name, still shows on hover and focus.
 - `Tooltip` (`@/shared/ui/tooltip`) — a short hint for a focusable element; it describes the trigger and never replaces its accessible name or holds the only copy of important information. `TooltipProvider` is mounted once in `app/App.tsx`; tests that render a tooltip wrap the tree in `<TooltipProvider delayDuration={0}>`.
 - `Badge` (`@/shared/ui/badge`) — small non-interactive label or count (`tone`: `neutral`, `accent`, `success`, `warning`, `danger`). Colour is never the only signal: add an icon or words, and give bare numbers words for screen readers (`<span className="sr-only"> dropped</span>`).
 - `Kbd` (`@/shared/ui/kbd`) — a key in shortcut hints.
@@ -28,7 +28,7 @@ paths:
 
 Production serves `style-src 'self'` (ADR-0003, `apps/web/build/security-headers.ts`). `style` props are fine (CSSOM); `<style>` elements are blocked and show up as console errors, which fail e2e. In `radix-ui` 1.8.1:
 
-- **Safe:** Tooltip (positions with `style` props), Slot, and primitives without scroll lock.
-- **Inject `<style>`:** Dialog and AlertDialog, Popover with `modal`, DropdownMenu / ContextMenu / Menubar when modal (the default) — all through `react-remove-scroll`; Select (scroll lock and an inline `<style>` in its viewport); ScrollArea (inline `<style>` in its viewport).
+- **Safe:** Tooltip (positions with `style` props), Slot, Menubar (its menus are always non-modal), and primitives without scroll lock.
+- **Inject `<style>`:** Dialog, AlertDialog (always modal, no opt-out), Popover with `modal`, DropdownMenu / ContextMenu when modal (the default) — all through `react-remove-scroll`; Select (scroll lock and an inline `<style>` in its viewport); ScrollArea (inline `<style>` in its viewport).
 
 Use one of those only with a decision recorded in ADR-0003 (relaxing `style-src-elem`) or a non-injecting configuration (`modal={false}`), and check it under `pnpm build:local` + `vite preview` with the e2e fixture, which fails on console errors.

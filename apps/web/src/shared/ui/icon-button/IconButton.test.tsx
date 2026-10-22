@@ -69,6 +69,44 @@ describe('IconButton', () => {
     expect(onClick).toHaveBeenCalledOnce();
   });
 
+  it('keeps a disabled button focusable with its tooltip, but ignores activation', async () => {
+    const user = userEvent.setup();
+    const onClick = vi.fn();
+    renderWithProvider(
+      <IconButton label="Pause" disabled onClick={onClick}>
+        <Pause aria-hidden />
+      </IconButton>,
+    );
+    const button = screen.getByRole('button', { name: 'Pause' });
+    expect(button).toHaveAttribute('aria-disabled', 'true');
+
+    await user.hover(button);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Pause');
+    await user.unhover(button);
+
+    await user.tab();
+    expect(button).toHaveFocus();
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Pause');
+
+    await user.click(button);
+    await user.keyboard('{Enter}');
+    await user.keyboard(' ');
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it('shows a shortcut that repeats a key', async () => {
+    const user = userEvent.setup();
+    renderWithProvider(
+      <IconButton label="Jump to latest" shortcut={['G', 'G']}>
+        <Pause aria-hidden />
+      </IconButton>,
+    );
+
+    await user.tab();
+    const tooltip = await screen.findByRole('tooltip');
+    expect(within(tooltip).getAllByText('G')).toHaveLength(2);
+  });
+
   it('labels a link rendered with asChild', () => {
     renderWithProvider(
       <IconButton label="Source code" asChild>
