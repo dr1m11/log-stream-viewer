@@ -1,5 +1,10 @@
 {
-  // Solution file: the app (browser) and its tooling configs (Node) are type-checked as two programs.
+  // Solution file: the app (browser), the Cloudflare Worker script and the tooling configs (Node)
+  // are type-checked as separate programs.
   "files": [],
-  "references": [{ "path": "./tsconfig.app.json" }, { "path": "./tsconfig.node.json" }]
+  "references": [
+    { "path": "./tsconfig.app.json" },
+    { "path": "./tsconfig.worker.json" },
+    { "path": "./tsconfig.node.json" }
+  ]
 }

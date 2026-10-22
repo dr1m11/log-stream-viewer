@@ -1,14 +1,21 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  // Static assets only, no Worker script (docs/adr/0003). Response headers come from dist/_headers,
-  // which the build generates (build/security-headers.ts). .github/workflows/deploy.yml deploys main
-  // and uploads a preview version per PR (alias pr-<number>).
+  // Static assets with a minimal Worker script (docs/adr/0003): worker/main.ts answers a missing
+  // /assets/* file with 404. Asset response headers come from dist/_headers, which the build
+  // generates (build/security-headers.ts). .github/workflows/deploy.yml deploys main and uploads a
+  // preview version per PR (alias pr-<number>).
   "name": "log-stream-viewer",
-  "compatibility_date": "2026-10-22",
+  "main": "./worker/main.ts",
+  // From 2025-04-01 navigation requests (Sec-Fetch-Mode: navigate) that match no asset get the SPA
+  // fallback without invoking the Worker script; only other misses reach it. No later than the
+  // newest date the workerd bundled with wrangler supports, so `wrangler dev` starts.
+  "compatibility_date": "2026-10-19",
   "workers_dev": true,
   "preview_urls": true,
   "assets": {
     "directory": "./dist",
+    // env.ASSETS in the Worker script: it hands every miss outside /assets back to the SPA fallback.
+    "binding": "ASSETS",
     // Deep links get index.html with status 200; the client renders the route.
     "not_found_handling": "single-page-application",
   },
