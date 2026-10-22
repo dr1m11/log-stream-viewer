@@ -17,8 +17,12 @@ import type {
   FromWorkerMessage,
   MessageEndpoint,
   ToWorkerMessage,
+  WorkerConfigureMessage,
   WorkerStartMessage,
 } from './worker-protocol';
+
+/** `stream-error` code when a `configure` arrives while the session has no open connection. */
+export const NOT_CONNECTED_ERROR_CODE = 'not-connected';
 
 export interface StreamWorkerHostDeps {
   /** Monotonic clock in milliseconds for the rate window: `performance.now` in the worker. */
@@ -120,10 +124,32 @@ export function createStreamWorkerHost(
         stats.onInvalidFrame();
         postCounters();
       },
+      onConfig({ requestId, rate, scenario }) {
+        post(
+          requestId === undefined
+            ? { type: 'config', session, rate, scenario }
+            : { type: 'config', session, requestId, rate, scenario },
+        );
+      },
+      onError({ code, message }) {
+        post({ type: 'stream-error', session, code, message });
+      },
       onClose(code, reason) {
         socket = undefined;
         post({ type: 'closed', session, code, reason, counters: stats.counters(now()) });
       },
+    });
+  }
+
+  function configure({ session: target, requestId, rate, scenario }: WorkerConfigureMessage): void {
+    // A request for an older session has nobody waiting for the answer.
+    if (target !== session) return;
+    if (socket?.configure({ requestId, rate, scenario }) === true) return;
+    post({
+      type: 'stream-error',
+      session,
+      code: NOT_CONNECTED_ERROR_CODE,
+      message: 'The stream is not connected, so the settings were not changed.',
     });
   }
 
@@ -134,6 +160,9 @@ export function createStreamWorkerHost(
         return;
       case 'stop':
         if (data.session === session) closeSocket();
+        return;
+      case 'configure':
+        configure(data);
         return;
       default:
         // A message type added to `ToWorkerMessage` without a case here fails to compile.

@@ -1,7 +1,7 @@
 import type { ColumnBatch, StreamCounters } from '@lsv/core';
-import type { HelloMessage } from '@lsv/protocol';
+import type { ConfigMessage, ErrorMessage, HelloMessage } from '@lsv/protocol';
 
-import type { StreamRequest } from '@/shared/api';
+import type { StreamConfigureRequest, StreamRequest } from '@/shared/api';
 
 /**
  * Messages between the main thread and the stream worker (docs/adr/0006, "Main ↔ worker
@@ -10,8 +10,7 @@ import type { StreamRequest } from '@/shared/api';
  *
  * Every message carries the `session` the main thread started: it increments the number on each
  * `start`, and drops whatever the worker still sends for an older session, so a restart never
- * mixes two streams. Later tasks add `configure`/`config`/`stream-error` (T6) and
- * `get-event`/`event` (T8) to these unions.
+ * mixes two streams. `get-event`/`event` (T8) join these unions later.
  */
 
 /** Opens a stream: closes the current connection and starts a new session with a new buffer. */
@@ -31,8 +30,17 @@ export interface WorkerStopMessage {
   readonly session: number;
 }
 
+/**
+ * Changes the settings of the session's stream (the server's `configure`). The worker answers
+ * with `config` once the server has applied it, or with `stream-error`.
+ */
+export interface WorkerConfigureMessage extends StreamConfigureRequest {
+  readonly type: 'configure';
+  readonly session: number;
+}
+
 /** Main thread → worker. */
-export type ToWorkerMessage = WorkerStartMessage | WorkerStopMessage;
+export type ToWorkerMessage = WorkerStartMessage | WorkerStopMessage | WorkerConfigureMessage;
 
 /** The server accepted the connection (its `hello`): the stream has started. */
 export interface WorkerHelloMessage extends Pick<HelloMessage, 'stream' | 'limits' | 'expiresAt'> {
@@ -67,9 +75,36 @@ export interface WorkerClosedMessage {
   readonly counters: StreamCounters;
 }
 
+/**
+ * The stream's effective settings (the server's `config`): the answer to `configure`, echoing its
+ * `requestId`, or a change the server made on its own (no `requestId`).
+ */
+export interface WorkerConfigMessage extends Pick<
+  ConfigMessage,
+  'requestId' | 'rate' | 'scenario'
+> {
+  readonly type: 'config';
+  readonly session: number;
+}
+
+/**
+ * A settings change failed: the server rejected the message (its `error`, whose open `code` set
+ * includes `bad-message` and `unsupported`), or the worker could not send it (`not-connected`).
+ * The settings stay as they were.
+ */
+export interface WorkerStreamErrorMessage extends Pick<ErrorMessage, 'code' | 'message'> {
+  readonly type: 'stream-error';
+  readonly session: number;
+}
+
 /** Worker → main thread. */
 export type FromWorkerMessage =
-  WorkerHelloMessage | WorkerBatchMessage | WorkerCountersMessage | WorkerClosedMessage;
+  | WorkerHelloMessage
+  | WorkerBatchMessage
+  | WorkerCountersMessage
+  | WorkerClosedMessage
+  | WorkerConfigMessage
+  | WorkerStreamErrorMessage;
 
 /**
  * One end of a message channel, as the worker global scope, a `Worker` or a `MessagePort`

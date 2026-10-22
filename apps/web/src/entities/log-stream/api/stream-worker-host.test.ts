@@ -1,5 +1,7 @@
 import { createEventStore, MAX_COLUMN_BATCH_ROWS } from '@lsv/core';
 import type { LogEvent } from '@lsv/protocol';
+import configFrame from '@lsv/protocol/fixtures/v1/config.json?raw';
+import errorUnknownCodeFrame from '@lsv/protocol/fixtures/v1/error-unknown-code.json?raw';
 import helloFrame from '@lsv/protocol/fixtures/v1/hello.json?raw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -12,7 +14,7 @@ import {
   testLogEvent,
 } from '@/shared/lib/testing';
 
-import { createStreamWorkerHost } from './stream-worker-host';
+import { createStreamWorkerHost, NOT_CONNECTED_ERROR_CODE } from './stream-worker-host';
 import type { FromWorkerMessage, ToWorkerMessage, WorkerBatchMessage } from './worker-protocol';
 
 const ENDPOINT = 'ws://localhost:8787/ws';
@@ -266,7 +268,7 @@ describe('createStreamWorkerHost', () => {
       now: () => 0,
       openSocket: (_endpoint, _request, socketHandlers) => {
         handlers = socketHandlers;
-        return { url: ENDPOINT, invalidFrames: 0, close: vi.fn() };
+        return { url: ENDPOINT, invalidFrames: 0, configure: () => false, close: vi.fn() };
       },
     });
     port.receive({ type: 'start', session: 1, endpoint: ENDPOINT, request: {}, capacity: 100 });
@@ -288,6 +290,65 @@ describe('createStreamWorkerHost', () => {
       columns: { firstPosition: 1, count: 1 },
       counters: { received: 2, missed: 2, invalidFrames: 1 },
     });
+  });
+
+  it("forwards configure to the session's socket and posts the server's config", () => {
+    const { port, start } = setup();
+    const socket = start(4);
+    connect(socket);
+
+    port.receive({ type: 'configure', session: 4, requestId: 'cfg-3', rate: 50_000 });
+    expect(socket.sent).toEqual(['{"type":"configure","requestId":"cfg-3","rate":50000}']);
+
+    socket.receive(configFrame);
+    socket.receive(JSON.stringify({ type: 'config', rate: 300, scenario: 'steady' }));
+
+    expect(port.messages().slice(-2)).toEqual([
+      { type: 'config', session: 4, requestId: 'cfg-3', rate: 20_000, scenario: 'error-burst' },
+      { type: 'config', session: 4, rate: 300, scenario: 'steady' },
+    ]);
+  });
+
+  it("posts the server's error as stream-error, whatever its code", () => {
+    const { port, start } = setup();
+    const socket = start(2);
+    connect(socket);
+
+    socket.receive(errorUnknownCodeFrame);
+
+    expect(port.messages().at(-1)).toEqual({
+      type: 'stream-error',
+      session: 2,
+      code: 'rate-limited',
+      message: 'Too many configure messages; wait before sending another',
+    });
+    expect(socket.closedWith).toBeUndefined();
+  });
+
+  it('answers a configure without an open connection with stream-error', () => {
+    const { port, start } = setup();
+    const socket = start(1);
+
+    port.receive({ type: 'configure', session: 1, requestId: 'cfg-1', scenario: 'steady' });
+
+    expect(socket.sent).toEqual([]);
+    expect(port.messages().at(-1)).toMatchObject({
+      type: 'stream-error',
+      session: 1,
+      code: NOT_CONNECTED_ERROR_CODE,
+    });
+  });
+
+  it('ignores a configure for an older session', () => {
+    const { port, start } = setup();
+    const socket = start(3);
+    connect(socket);
+    const posted = port.posted.length;
+
+    port.receive({ type: 'configure', session: 2, requestId: 'cfg-1', rate: 500 });
+
+    expect(socket.sent).toEqual([]);
+    expect(port.posted).toHaveLength(posted);
   });
 
   it('closes the connection and stops listening when disposed', () => {
