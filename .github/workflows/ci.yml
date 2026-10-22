@@ -113,6 +113,44 @@ jobs:
           path: apps/web/playwright-report/
           retention-days: 3
 
+  # lighthouserc.json: the build behind `vite preview` (with its CSP) and the mock server at a low
+  # rate, so a live stream does not make the timings noisy. Accessibility fails the job, the rest warns.
+  lighthouse:
+    name: Lighthouse CI
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+
+      - name: Download build
+        uses: actions/download-artifact@v8
+        with:
+          name: web-dist
+          path: apps/web/dist/
+      - name: Collect, assert and upload to temporary public storage
+        run: pnpm lhci
+      - name: Link the reports in the job summary
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -f .lighthouseci/links.json ]; then
+            {
+              echo '### Lighthouse reports'
+              node -e 'for (const [url, report] of Object.entries(require("./.lighthouseci/links.json"))) console.log(`- [${url}](${report})`)'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload Lighthouse results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: lighthouse
+          path: .lighthouseci/
+          include-hidden-files: true
+          retention-days: 14
+
   # The image that deploy.yml ships to Fly.io, started with its production defaults
   # (NODE_ENV=production: the Origin must be allowed, a missing one is rejected).
   server-image:
@@ -146,7 +184,7 @@ jobs:
   ci-ok:
     name: CI OK
     if: always()
-    needs: [quality, test, build, e2e, server-image]
+    needs: [quality, test, build, e2e, lighthouse, server-image]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
