@@ -6,5 +6,7 @@ export type {
   LogStreamOptions,
   LogStreamSnapshot,
   LogStreamStore,
+  StreamSettingsChange,
+  StreamSettingsRequests,
 } from './model/log-stream-store';
 export { useLogStreamSelector, useLogStreamStore } from './model/use-log-stream';

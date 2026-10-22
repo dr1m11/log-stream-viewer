@@ -24,6 +24,8 @@ function spyHandlers() {
     onHello: vi.fn(),
     onBatch: vi.fn(),
     onHeartbeat: vi.fn(),
+    onConfig: vi.fn(),
+    onError: vi.fn(),
     onInvalidFrame: vi.fn(),
     onClose: vi.fn(),
   };
@@ -151,15 +153,66 @@ describe('openStreamSocket', () => {
     expect(handlers.onBatch).toHaveBeenCalledExactlyOnceWith(parsed(batchUnknownFieldsFrame));
   });
 
-  it('ignores messages of an unknown type and answers to configure', () => {
+  it('ignores messages of an unknown type', () => {
     const { stream, socket, handlers } = connect();
 
     socket.receive(unknownTypeFrame);
-    socket.receive(configFrame);
-    socket.receive(errorFrame);
 
     expect(stream.invalidFrames).toBe(0);
     for (const handler of Object.values(handlers)) expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('reports the answers to configure: config and error', () => {
+    const { socket, handlers } = connect();
+    socket.open();
+    socket.receive(helloFrame);
+
+    socket.receive(configFrame);
+    socket.receive(errorFrame);
+
+    expect(handlers.onConfig).toHaveBeenCalledExactlyOnceWith(parsed(configFrame));
+    expect(handlers.onError).toHaveBeenCalledExactlyOnceWith(parsed(errorFrame));
+    expect(socket.closedWith).toBeUndefined();
+  });
+
+  it('sends configure as one JSON text frame with only the fields it was given', () => {
+    const { stream, socket } = connect();
+    socket.open();
+    socket.receive(helloFrame);
+
+    expect(stream.configure({ requestId: 'cfg-1', rate: 1000 })).toBe(true);
+    expect(stream.configure({ requestId: 'cfg-2', scenario: 'traffic-spike' })).toBe(true);
+
+    expect(socket.sent).toEqual([
+      '{"type":"configure","requestId":"cfg-1","rate":1000}',
+      '{"type":"configure","requestId":"cfg-2","scenario":"traffic-spike"}',
+    ]);
+  });
+
+  it('sends no configure unless the socket is open', async () => {
+    const { stream, socket } = connect();
+    expect(stream.configure({ requestId: 'cfg-1', rate: 1000 })).toBe(false);
+
+    socket.open();
+    socket.closeFromServer(1001, 'server shutting down');
+    expect(stream.configure({ requestId: 'cfg-2', rate: 1000 })).toBe(false);
+
+    const open = connect();
+    open.socket.open();
+    open.stream.close();
+    expect(open.stream.configure({ requestId: 'cfg-3', rate: 1000 })).toBe(false);
+
+    vi.stubGlobal(
+      'WebSocket',
+      vi.fn(function refuse() {
+        throw new SyntaxError('bad URL');
+      }),
+    );
+    const refused = openStreamSocket(ENDPOINT, {}, spyHandlers());
+    expect(refused.configure({ requestId: 'cfg-4', rate: 1000 })).toBe(false);
+    await Promise.resolve();
+
+    expect([...socket.sent, ...open.socket.sent]).toEqual([]);
   });
 
   it('counts and drops malformed frames without closing the connection', () => {

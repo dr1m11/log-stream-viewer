@@ -7,7 +7,7 @@ export interface CloseRequest {
 /**
  * Stand-in for the browser `WebSocket` in unit tests. Install it with
  * `vi.stubGlobal('WebSocket', FakeWebSocket)`, drive the connection from the test (`open()`,
- * `receive()`, `closeFromServer()`) and inspect what the code under test did (`url`, `closedWith`).
+ * `receive()`, `closeFromServer()`) and inspect what the code under test did (`url`, `sent`, `closedWith`).
  * Handlers run synchronously, so wrap the controls in `act()` when React state depends on them.
  */
 export class FakeWebSocket {
@@ -40,10 +40,19 @@ export class FakeWebSocket {
   onclose: ((event: CloseEvent) => void) | null = null;
   /** Set when the code under test called `close()`. */
   closedWith: CloseRequest | undefined;
+  /** Frames the code under test sent, oldest first. */
+  readonly sent: unknown[] = [];
 
   constructor(url: string | URL) {
     this.url = String(url);
     FakeWebSocket.instances.push(this);
+  }
+
+  send(data: unknown): void {
+    if (this.readyState !== FakeWebSocket.OPEN) {
+      throw new DOMException('WebSocket is not open', 'InvalidStateError');
+    }
+    this.sent.push(data);
   }
 
   close(code?: number, reason?: string): void {

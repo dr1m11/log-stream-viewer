@@ -2,6 +2,9 @@ import {
   type BatchMessage,
   buildConnectionUrl,
   CLOSE_CODES,
+  type ConfigMessage,
+  type ConfigureMessage,
+  type ErrorMessage,
   HEARTBEAT_INTERVAL_MS,
   type HeartbeatMessage,
   type HelloMessage,
@@ -18,6 +21,15 @@ export interface StreamRequest {
   readonly scenario?: Scenario;
   /** PRNG seed: the same seed and scenario reproduce the stream. */
   readonly seed?: number;
+}
+
+/** A change of the stream settings (`configure`); omitted fields stay as they are. */
+export interface StreamConfigureRequest {
+  /** Echoed by the server's `config` answer, so the client can match it to this request. */
+  readonly requestId: string;
+  /** Events per second; the server clamps it to `hello.limits`. */
+  readonly rate?: number;
+  readonly scenario?: Scenario;
 }
 
 /**
@@ -43,6 +55,13 @@ export interface StreamSocketHandlers {
   readonly onHello?: (message: HelloMessage) => void;
   readonly onBatch?: (message: BatchMessage) => void;
   readonly onHeartbeat?: (message: HeartbeatMessage) => void;
+  /**
+   * The effective settings: the answer to `configure` (with its `requestId`), or a change the
+   * server made on its own (without one).
+   */
+  readonly onConfig?: (message: ConfigMessage) => void;
+  /** The server rejected a client message; the socket stays open. */
+  readonly onError?: (message: ErrorMessage) => void;
   /** A frame was dropped because it is not a valid message (`invalid-json` / `invalid-message`). */
   readonly onInvalidFrame?: (error: ProtocolError) => void;
   /**
@@ -58,6 +77,12 @@ export interface StreamSocket {
   readonly url: string;
   /** Frames dropped so far because they were not valid messages. */
   readonly invalidFrames: number;
+  /**
+   * Asks the server to change the stream settings (`configure`). Returns `false` and sends nothing
+   * unless the socket is open. The server limits client messages to 20 per second (bursts of 40)
+   * and closes a faster client with 1008, so callers send on user commits, not per input event.
+   */
+  configure(request: StreamConfigureRequest): boolean;
   /** Closes the connection; no handler runs afterwards. Safe to call more than once. */
   close(): void;
 }
@@ -150,8 +175,10 @@ export function openStreamSocket(
         handlers.onHeartbeat?.(message);
         return;
       case 'config':
+        handlers.onConfig?.(message);
+        return;
       case 'error':
-        // Answers to `configure`, which this client does not send yet.
+        handlers.onError?.(message);
         return;
     }
   };
@@ -164,6 +191,17 @@ export function openStreamSocket(
     url,
     get invalidFrames() {
       return invalidFrames;
+    },
+    configure({ requestId, rate, scenario }) {
+      if (done || socket.readyState !== WebSocket.OPEN) return false;
+      const message: ConfigureMessage = {
+        type: 'configure',
+        requestId,
+        ...(rate === undefined ? {} : { rate }),
+        ...(scenario === undefined ? {} : { scenario }),
+      };
+      socket.send(JSON.stringify(message));
+      return true;
     },
     close() {
       if (done) return;
@@ -194,6 +232,7 @@ function unopenedSocket(url: string, error: unknown, handlers: StreamSocketHandl
   return {
     url,
     invalidFrames: 0,
+    configure: () => false,
     close() {
       closed = true;
     },

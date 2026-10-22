@@ -369,6 +369,155 @@ describe('createLogStreamStore', () => {
     expect(worker().messages().at(-1)).toMatchObject({ type: 'stop' });
   });
 
+  it('sends configure only while connected, with a new request id each time', () => {
+    const { store, worker, hello } = setup();
+    expect(store.configure({ rate: 1000 })).toBeUndefined();
+    expect(worker().messages()).toHaveLength(1);
+
+    hello();
+    expect(store.configure({ rate: 1000 })).toBe('cfg-1');
+    expect(store.configure({ scenario: 'error-burst' })).toBe('cfg-2');
+
+    expect(worker().messages().slice(1)).toEqual([
+      { type: 'configure', session: 1, requestId: 'cfg-1', rate: 1000, scenario: undefined },
+      {
+        type: 'configure',
+        session: 1,
+        requestId: 'cfg-2',
+        rate: undefined,
+        scenario: 'error-burst',
+      },
+    ]);
+  });
+
+  it("publishes the pending change at once and applies the server's config to the status", () => {
+    const { store, listener, send, hello } = setup();
+    hello();
+    nextFrame();
+    listener.mockClear();
+
+    const requestId = store.configure({ rate: 50_000, scenario: 'traffic-spike' });
+    expect(listener).toHaveBeenCalledOnce();
+    expect(store.getSnapshot().settings).toEqual({
+      pending: { requestId, rate: 50_000, scenario: 'traffic-spike' },
+      error: undefined,
+    });
+    const before = store.getSnapshot().status;
+
+    send({ type: 'config', session: 1, requestId, rate: 20_000, scenario: 'traffic-spike' });
+    nextFrame();
+
+    const { status, settings } = store.getSnapshot();
+    expect(status).not.toBe(before);
+    expect(status).toMatchObject({
+      phase: 'connected',
+      stream: { rate: 20_000, scenario: 'traffic-spike', seed: 42 },
+      limits: testHello().limits,
+    });
+    expect(settings).toEqual({ pending: undefined, error: undefined });
+  });
+
+  it('keeps the latest request pending until its own answer arrives', () => {
+    const { store, send, hello } = setup();
+    hello();
+    const first = store.configure({ rate: 300 });
+    const second = store.configure({ rate: 400 });
+    expect(first).not.toBe(second);
+
+    // The answer to the first request, then a change the server made on its own.
+    send({ type: 'config', session: 1, requestId: first, rate: 300, scenario: 'steady' });
+    send({ type: 'config', session: 1, rate: 300, scenario: 'error-burst' });
+    nextFrame();
+    expect(store.getSnapshot()).toMatchObject({
+      status: { stream: { rate: 300, scenario: 'error-burst' } },
+      settings: { pending: { requestId: second, rate: 400 } },
+    });
+
+    send({ type: 'config', session: 1, requestId: second, rate: 400, scenario: 'error-burst' });
+    nextFrame();
+    expect(store.getSnapshot()).toMatchObject({
+      status: { stream: { rate: 400 } },
+      settings: { pending: undefined },
+    });
+  });
+
+  it('merges unanswered requests, so a rate after a scenario keeps the pending scenario', () => {
+    const { store, send, hello } = setup();
+    hello();
+    const first = store.configure({ scenario: 'error-burst' });
+    const second = store.configure({ rate: 900 });
+    expect(store.getSnapshot().settings.pending).toEqual({
+      requestId: second,
+      rate: 900,
+      scenario: 'error-burst',
+    });
+
+    // The answer to the older request applies its settings but leaves the merged request pending.
+    send({ type: 'config', session: 1, requestId: first, rate: 200, scenario: 'error-burst' });
+    nextFrame();
+    expect(store.getSnapshot()).toMatchObject({
+      status: { stream: { rate: 200, scenario: 'error-burst' } },
+      settings: { pending: { requestId: second, rate: 900, scenario: 'error-burst' } },
+    });
+
+    send({ type: 'config', session: 1, requestId: second, rate: 900, scenario: 'error-burst' });
+    nextFrame();
+    expect(store.getSnapshot()).toMatchObject({
+      status: { stream: { rate: 900, scenario: 'error-burst' } },
+      settings: { pending: undefined },
+    });
+
+    // Once answered, a new request starts from the effective settings again.
+    const third = store.configure({ rate: 100 });
+    expect(store.getSnapshot().settings.pending).toEqual({
+      requestId: third,
+      rate: 100,
+      scenario: undefined,
+    });
+  });
+
+  it('surfaces a stream-error, keeps the effective settings and clears it on the next request', () => {
+    const { store, send, hello } = setup();
+    hello();
+    nextFrame();
+    const { status } = store.getSnapshot();
+    store.configure({ scenario: 'error-burst' });
+
+    send({ type: 'stream-error', session: 1, code: 'bad-message', message: 'Invalid scenario' });
+    nextFrame();
+
+    expect(store.getSnapshot().status).toBe(status);
+    expect(store.getSnapshot().settings).toEqual({
+      pending: undefined,
+      error: { code: 'bad-message', message: 'Invalid scenario' },
+    });
+
+    const requestId = store.configure({ rate: 500 });
+    expect(store.getSnapshot().settings).toEqual({
+      pending: { requestId, rate: 500, scenario: undefined },
+      error: undefined,
+    });
+  });
+
+  it('drops config and stream-error of an older session and forgets requests on start()', () => {
+    const { store, send, hello } = setup();
+    hello();
+    store.configure({ rate: 700 });
+
+    store.start();
+    expect(store.getSnapshot().settings).toEqual({ pending: undefined, error: undefined });
+    hello(2);
+    nextFrame();
+    const { status } = store.getSnapshot();
+
+    send({ type: 'config', session: 1, requestId: 'cfg-1', rate: 700, scenario: 'steady' });
+    send({ type: 'stream-error', session: 1, code: 'unsupported', message: 'late' });
+    nextFrame();
+
+    expect(store.getSnapshot().status).toBe(status);
+    expect(store.getSnapshot().settings).toEqual({ pending: undefined, error: undefined });
+  });
+
   it('terminates the worker and publishes nothing more on stop()', () => {
     const { store, listener, worker, send, hello } = setup();
     hello();

@@ -1,4 +1,5 @@
 import { useLogStreamStore } from '@/entities/log-stream';
+import { StreamSettingsControls } from '@/features/configure-stream';
 import { ThemeToggle } from '@/features/toggle-theme';
 import { STREAM_URL } from '@/shared/config';
 
@@ -36,6 +37,7 @@ export function StreamPage() {
         </div>
       </header>
       <main className="mx-auto grid w-full max-w-5xl flex-1 content-start gap-6 px-4 py-6">
+        <StreamSettingsControls store={store} />
         <StreamStats store={store} />
         <LatestEvent store={store} />
       </main>
