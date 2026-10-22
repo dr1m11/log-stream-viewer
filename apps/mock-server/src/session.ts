@@ -45,8 +45,12 @@ export const MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
 export const SOFT_IN_FLIGHT_MESSAGES = 25;
 /** …and more than this terminates the socket. */
 export const MAX_IN_FLIGHT_MESSAGES = 100;
-/** A socket that completes no write for this long (the client reads nothing) is terminated. */
-export const STALL_TIMEOUT_MS = 10_000;
+/**
+ * A socket that completes no write for this long (the client reads nothing, or far too little) is
+ * terminated. As long as the ping liveness window (two pings), so a client that freezes briefly
+ * (a debugger pause, a long task) survives; the in-flight caps bound its memory meanwhile.
+ */
+export const STALL_TIMEOUT_MS = 2 * PING_INTERVAL_MS;
 
 /** Weight of the latest tick in the moving average of the granted rate. */
 const RATE_SMOOTHING = 0.1;
