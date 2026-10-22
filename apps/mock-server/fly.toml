@@ -14,12 +14,16 @@ primary_region = "fra"
   dockerfile = "Dockerfile"
 
 # Parsed by apps/mock-server/src/config.ts (limits: docs/adr/0005). GIT_SHA comes from the build arg.
+# MAX_RATE and GLOBAL_MAX_EVENTS_PER_SEC follow the shared-CPU measurements in docs/adr/0003.
 [env]
   NODE_ENV = "production"
   PORT = "8080"
   HOST = "0.0.0.0"
   MAX_RATE = "5000"
   GLOBAL_MAX_EVENTS_PER_SEC = "10000"
+  MAX_CONNECTIONS = "50"
+  # Fly's proxy sets Fly-Client-IP on every request, so the per-IP cap can trust it.
+  TRUST_PROXY_IP_HEADER = "true"
   # The production client and its per-PR previews; a literal string keeps the regex backslashes.
   ALLOWED_ORIGINS = 'https://log-stream-viewer.marat-gabdrashitov17.workers.dev,^https://pr-\d+-log-stream-viewer\.marat-gabdrashitov17\.workers\.dev$'
 
