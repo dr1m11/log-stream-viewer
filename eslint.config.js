@@ -97,6 +97,31 @@ const APPS_FROM_PACKAGES_BANS = [
   { regex: '^(\\.\\./){2,}apps(/|$)', message: APPS_FROM_PACKAGES_MESSAGE },
 ];
 
+/**
+ * Globals no package may use (`no-restricted-globals` options are replaced, not merged, by a later
+ * block for the same files, so every block that sets the rule spreads this list).
+ * @type {{ name: string, message: string }[]}
+ */
+const PACKAGE_GLOBAL_BANS = [
+  ...['window', 'document', 'navigator', 'location', 'localStorage', 'sessionStorage'].map(
+    (name) => ({ name, message: 'packages/* must not depend on browser APIs.' }),
+  ),
+  ...['process', 'Buffer', 'require', '__dirname', '__filename'].map((name) => ({
+    name,
+    message: 'packages/* must not depend on Node APIs.',
+  })),
+];
+const CORE_CLOCK_MESSAGE =
+  '@lsv/core takes time as an argument (`now`): no clocks, timers or animation frames inside (see docs/adr/0006).';
+/** @type {{ name: string, message: string }[]} */
+const CORE_CLOCK_BANS = [
+  'Date',
+  'performance',
+  'setTimeout',
+  'setInterval',
+  'requestAnimationFrame',
+].map((name) => ({ name, message: CORE_CLOCK_MESSAGE }));
+
 export default defineConfig(
   globalIgnores([
     '**/dist/',
@@ -201,7 +226,7 @@ export default defineConfig(
     },
   },
   {
-    // protocol now, core from B2: plain TypeScript without React, DOM, Node or the apps.
+    // protocol and core: plain TypeScript without React, DOM, Node or the apps.
     files: ['packages/*/**/*.ts'],
     rules: {
       'no-restricted-imports': restrictImports(
@@ -209,16 +234,15 @@ export default defineConfig(
         [{ regex: NODE_BUILTINS_RE, message: PACKAGES_MESSAGE }],
         APPS_FROM_PACKAGES_BANS,
       ),
-      'no-restricted-globals': [
-        'error',
-        ...['window', 'document', 'navigator', 'location', 'localStorage', 'sessionStorage'].map(
-          (name) => ({ name, message: 'packages/* must not depend on browser APIs.' }),
-        ),
-        ...['process', 'Buffer', 'require', '__dirname', '__filename'].map((name) => ({
-          name,
-          message: 'packages/* must not depend on Node APIs.',
-        })),
-      ],
+      'no-restricted-globals': ['error', ...PACKAGE_GLOBAL_BANS],
+    },
+  },
+  {
+    // The stream engine runs on its caller's clock, so tests drive it with plain numbers.
+    files: ['packages/core/src/**/*.ts'],
+    ignores: ['**/*.test.ts', '**/*.bench.ts'],
+    rules: {
+      'no-restricted-globals': ['error', ...PACKAGE_GLOBAL_BANS, ...CORE_CLOCK_BANS],
     },
   },
   {

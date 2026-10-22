@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.lib.tsbuildinfo",
+    // The same sources run in the stream worker, on the main thread and under Node in tests:
+    // explicit `.ts` in relative imports, like @lsv/protocol.
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    // No DOM lib and no ambient types: browser, worker and Node APIs must not leak into the engine.
+    "lib": ["ES2023"],
+    "types": [],
+    "exactOptionalPropertyTypes": true
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.bench.ts"]
+}
