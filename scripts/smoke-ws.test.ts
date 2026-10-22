@@ -320,7 +320,8 @@ describe('runSmoke', () => {
   it('reports the previous failure when the deadline cuts the last attempt short', async () => {
     const server = await startFakeServer({ version: 'old', answeredRequests: 2 });
     try {
-      const { result } = await smoke(server, ['--expect-version', 'new'], 300);
+      // Room for two quick answers on a slow runner; the third request hangs until the deadline.
+      const { result } = await smoke(server, ['--expect-version', 'new'], 1000);
       assert.ok(!result.ok);
       assert.equal(
         result.error,
