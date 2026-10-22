@@ -29,4 +29,20 @@ export default defineConfig([
       'fsd/insignificant-slice': 'off',
     },
   },
+  {
+    // The event presentation (time, level) has one consumer, the table, until the details view of
+    // B2 (expanded rows) and the search results of B3 show events too.
+    files: ['./src/entities/log-event/**'],
+    rules: {
+      'fsd/insignificant-slice': 'off',
+    },
+  },
+  {
+    // The table is a self-contained block of the single page; it stays a widget because it
+    // composes features (pause, row details) and entities, which a page segment should not own.
+    files: ['./src/widgets/log-table/**'],
+    rules: {
+      'fsd/insignificant-slice': 'off',
+    },
+  },
 ]);
