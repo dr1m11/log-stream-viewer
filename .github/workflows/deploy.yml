@@ -162,6 +162,27 @@ jobs:
             fi
             sleep 5
           done
+      # A missing chunk reaches the Worker script (apps/web/worker/main.ts) instead of the SPA
+      # fallback: 404 that nothing caches, never index.html with the immutable header of /assets/*.
+      # Retried for 60 s like the deep link: an edge may still serve the previous version.
+      - name: Smoke-check a missing asset
+        run: |
+          deadline=$((SECONDS + 60))
+          while :; do
+            headers="$(curl --silent --show-error --max-time 10 --dump-header - --output /dev/null \
+              "$WEB_URL/assets/does-not-exist-smoke.js" | tr -d '\r' || true)"
+            status="$(sed -n 's/^HTTP\/[0-9.]* \([0-9]*\).*/\1/p' <<< "$headers" | tail -n 1)"
+            cache="$(sed -n 's/^cache-control: //Ip' <<< "$headers" | tail -n 1)"
+            if [[ "$status" == 404 && "$cache" == no-store ]]; then
+              echo "Status 404 with Cache-Control: no-store"
+              break
+            fi
+            if ((SECONDS >= deadline)); then
+              echo "::error::A missing asset returned status ${status:-none} with Cache-Control: ${cache:-none}"
+              exit 1
+            fi
+            sleep 5
+          done
 
       # The e2e smoke spec (only this file: other specs may need the local server's settings) against
       # production and its mock server: "Connected", a growing counter, no console errors (CSP
@@ -228,6 +249,22 @@ jobs:
         run: >-
           curl --fail --silent --show-error --retry 5 --retry-delay 3 --retry-all-errors
           --output /dev/null "$PREVIEW_URL/streams/smoke?deep=link"
+      # A missing chunk gets the Worker script's 404 with no-store, not the SPA fallback. The URL
+      # serves only this version, so the deep link check above has already waited for it.
+      - name: Smoke-check a missing asset
+        env:
+          PREVIEW_URL: ${{ steps.upload.outputs.url }}
+        run: |
+          headers="$(curl --silent --show-error --max-time 10 --retry 5 --retry-delay 3 \
+            --dump-header - --output /dev/null "$PREVIEW_URL/assets/does-not-exist-smoke.js" |
+            tr -d '\r')"
+          status="$(sed -n 's/^HTTP\/[0-9.]* \([0-9]*\).*/\1/p' <<< "$headers" | tail -n 1)"
+          cache="$(sed -n 's/^cache-control: //Ip' <<< "$headers" | tail -n 1)"
+          if [[ "$status" != 404 || "$cache" != no-store ]]; then
+            echo "::error::A missing asset returned status ${status:-none} with Cache-Control: ${cache:-none}"
+            exit 1
+          fi
+          echo "Status 404 with Cache-Control: no-store"
       - name: Comment the preview URL
         uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
