@@ -2,7 +2,7 @@ import { LOG_LEVELS, type LogEvent } from '@lsv/protocol';
 import { describe, expect, it } from 'vitest';
 
 import { type ColumnBatch, columnBatchTransferables } from './column-batch.ts';
-import { createEventStore, type EventStore } from './event-store.ts';
+import { createEventStore, type EventStore, MAX_COLUMN_BATCH_ROWS } from './event-store.ts';
 import { DICTIONARY_OVERFLOW_LABEL } from './string-dictionary.ts';
 
 const SERVICES = ['api-gateway', 'orders', 'payments'] as const;
@@ -193,6 +193,33 @@ describe('createEventStore', () => {
     expect(store).toMatchObject({ start: 0, end: 1 });
     expect(store.eventAt(0)).toEqual(makeEvent(1));
   });
+
+  it('retains no unwritten slot when a batch larger than the capacity has a hole', () => {
+    const store = createEventStore({ capacity: 4, keepPayload: true });
+    store.appendEvents(makeEvents(100, 2));
+    // Events 1..6 are skipped (only the newest four would fit); event 7 is written, 8 is a hole.
+    const sparse = new Array<LogEvent>(10);
+    for (let index = 0; index < 10; index++) {
+      if (index !== 7) sparse[index] = makeEvent(index + 1);
+    }
+
+    expect(() => {
+      store.appendEvents(sparse);
+    }).toThrow(TypeError);
+    expect(store).toMatchObject({ start: 8, end: 9, size: 1 });
+    expect(store.eventAt(8)).toEqual(makeEvent(7));
+  });
+
+  it('rejects a level outside LOG_LEVELS and keeps the events before it', () => {
+    const store = createEventStore({ capacity: 4, keepPayload: false });
+    const invalid = { ...makeEvent(2) };
+    Reflect.set(invalid, 'level', 'verbose');
+
+    expect(() => {
+      store.appendEvents([makeEvent(1), invalid]);
+    }).toThrow(/verbose/);
+    expect(store).toMatchObject({ start: 0, end: 1 });
+  });
 });
 
 describe('column batches', () => {
@@ -227,6 +254,57 @@ describe('column batches', () => {
     expect(batch?.message).toEqual([4, 5, 6].map((seq) => makeEvent(seq).message));
     expect(batch?.traceId).toEqual(['trace-4', 'trace-5', undefined]);
     expect(source.takeColumnBatch()).toBeUndefined();
+  });
+
+  it('split a backlog into batches of at most maxRows that rebuild the same rows', () => {
+    const source = createEventStore({ capacity: 20, keepPayload: true });
+    const replica = createEventStore({ capacity: 20, keepPayload: false });
+    source.appendEvents(makeEvents(1, 13));
+
+    const counts = [];
+    for (let batch = source.takeColumnBatch(5); batch; batch = source.takeColumnBatch(5)) {
+      counts.push(batch.count);
+      replica.appendColumns(batch);
+    }
+
+    expect(counts).toEqual([5, 5, 3]);
+    expect(rows(replica)).toEqual(rows(source));
+  });
+
+  it('split a backlog that outgrew the capacity, starting at the oldest retained row', () => {
+    const source = createEventStore({ capacity: 8, keepPayload: true });
+    const replica = createEventStore({ capacity: 8, keepPayload: false });
+    source.appendEvents(makeEvents(1, 2));
+    sync(source, replica);
+    source.appendEvents(makeEvents(3, 20));
+
+    const batches = [];
+    for (let batch = source.takeColumnBatch(3); batch; batch = source.takeColumnBatch(3)) {
+      batches.push({ firstPosition: batch.firstPosition, count: batch.count });
+      replica.appendColumns(batch);
+    }
+
+    expect(batches).toEqual([
+      { firstPosition: 14, count: 3 },
+      { firstPosition: 17, count: 3 },
+      { firstPosition: 20, count: 2 },
+    ]);
+    expect(rows(replica)).toEqual(rows(source));
+  });
+
+  it(`carry at most ${String(MAX_COLUMN_BATCH_ROWS)} rows by default`, () => {
+    const source = createEventStore({ capacity: MAX_COLUMN_BATCH_ROWS + 10, keepPayload: false });
+    source.appendEvents(makeEvents(1, MAX_COLUMN_BATCH_ROWS + 5));
+
+    expect(source.takeColumnBatch()?.count).toBe(MAX_COLUMN_BATCH_ROWS);
+    expect(source.takeColumnBatch()?.count).toBe(5);
+  });
+
+  it('reject a maxRows that is not a positive integer', () => {
+    const source = createEventStore({ capacity: 4, keepPayload: false });
+
+    expect(() => source.takeColumnBatch(0)).toThrow(RangeError);
+    expect(() => source.takeColumnBatch(1.5)).toThrow(RangeError);
   });
 
   it('carry each service and host name once, in id order', () => {

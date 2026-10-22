@@ -11,7 +11,12 @@ export {
   MIN_BUFFER_CAPACITY,
 } from './buffer-capacity.ts';
 export { type ColumnBatch, columnBatchTransferables } from './column-batch.ts';
-export { createEventStore, type EventStore, type EventStoreOptions } from './event-store.ts';
+export {
+  createEventStore,
+  type EventStore,
+  type EventStoreOptions,
+  MAX_COLUMN_BATCH_ROWS,
+} from './event-store.ts';
 export { createStreamStats, type StreamCounters, type StreamStats } from './stream-stats.ts';
 export {
   DEFAULT_DICTIONARY_CAPACITY,

@@ -7,7 +7,10 @@
 export const DEFAULT_BUFFER_CAPACITY = 100_000;
 /** Smallest capacity: below it a burst of a few batches would evict rows while they are on screen. */
 export const MIN_BUFFER_CAPACITY = 1_000;
-/** Largest capacity: about 150 MB of columns and strings on the main thread (docs/adr/0006). */
+/**
+ * Largest capacity, best effort: about 140 MB on the main thread and 245 MB in the worker
+ * (docs/adr/0006), still to be confirmed by browser measurements.
+ */
 export const MAX_BUFFER_CAPACITY = 1_000_000;
 
 /**

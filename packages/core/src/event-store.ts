@@ -7,6 +7,18 @@ type Payload = Readonly<Record<string, JsonValue>>;
 
 /** Read once: a module runner may turn every read of an imported binding into a getter call. */
 const LEVELS: readonly LogLevel[] = LOG_LEVELS;
+/** Level name → index in `LOG_LEVELS`, the code stored in the `level` column. */
+const LEVEL_CODES = new Map<string, number>(LEVELS.map((name, code) => [name, code]));
+
+/**
+ * Most rows one column batch carries. A steady stream never reaches it: the server's ceiling of
+ * 20,000 events per second is 1,000 events per 50 ms tick. After a stall (a busy main thread, a
+ * throttled tab) the backlog can reach the whole capacity, up to 1M rows; cut into batches of this
+ * size, each `postMessage` and `appendColumns` stays a task of a few milliseconds instead of one
+ * task that blocks both threads for 100 ms or more (`pnpm bench`: appending, encoding, cloning
+ * and replicating an 8K-row batch takes about 5 ms in total).
+ */
+export const MAX_COLUMN_BATCH_ROWS = 8192;
 
 export interface EventStoreOptions {
   /** Hard limit of retained events; appending past it evicts the oldest ones. A positive integer. */
@@ -63,14 +75,14 @@ export interface EventStore {
   readonly hasPayloadAt: (position: number) => boolean;
   /**
    * The event at `position` as a `LogEvent` (a new object), or `undefined` when the position is
-   * not retained. `payload` is present only in a store with `keepPayload` that received the event
+   * not retained. It allocates: use it for on-demand details, not in the row loop. `payload` is present only in a store with `keepPayload` that received the event
    * through {@link EventStore.appendEvents}.
    */
   readonly eventAt: (position: number) => LogEvent | undefined;
   /**
-   * Appends parsed events (the worker side). Evicts the oldest events beyond `capacity`. An array
-   * with holes (`parseServerMessage` never returns one) throws a `TypeError` after the events
-   * before the hole were appended.
+   * Appends parsed events (the worker side). Evicts the oldest events beyond `capacity`. A hole in
+   * the array or a level outside `LOG_LEVELS` (`parseServerMessage` lets neither through) throws a
+   * `TypeError`: the events before it stay appended, and no slot that was not written is retained.
    */
   readonly appendEvents: (events: readonly LogEvent[]) => void;
   /**
@@ -82,11 +94,13 @@ export interface EventStore {
    */
   readonly appendColumns: (batch: ColumnBatch) => void;
   /**
-   * Encodes the rows appended since the previous call — only those still retained — together with
-   * the dictionary entries added since then, or returns `undefined` when there are no new rows.
-   * The batch owns fresh buffers, ready to be transferred (`columnBatchTransferables`).
+   * Encodes up to `maxRows` (default {@link MAX_COLUMN_BATCH_ROWS}) of the rows appended since the
+   * previous batch — only those still retained, oldest first — together with the dictionary
+   * entries added since then, or returns `undefined` when there are no new rows. Call it until it
+   * returns `undefined` to send a whole backlog. The batch owns fresh buffers, ready to be
+   * transferred (`columnBatchTransferables`).
    */
-  readonly takeColumnBatch: () => ColumnBatch | undefined;
+  readonly takeColumnBatch: (maxRows?: number) => ColumnBatch | undefined;
   /**
    * Drops every event and dictionary entry and restarts positions at 0 (a new session). A store
    * that receives this store's batches must be cleared at the same time.
@@ -114,6 +128,16 @@ function levelName(code: number): LogLevel {
   return LEVELS[code] ?? 'info';
 }
 
+/**
+ * A preallocated array built by pushing: `new Array(n)` starts HOLEY in V8 and stays holey even
+ * after `fill`, which costs a hole check on every read.
+ */
+function packedArray<T>(length: number, value: T): T[] {
+  const array: T[] = [];
+  for (let index = 0; index < length; index++) array.push(value);
+  return array;
+}
+
 export function createEventStore(options: EventStoreOptions): EventStore {
   const { capacity, keepPayload, dictionaryCapacity = DEFAULT_DICTIONARY_CAPACITY } = options;
   if (!Number.isInteger(capacity) || capacity < 1) {
@@ -128,10 +152,9 @@ export function createEventStore(options: EventStoreOptions): EventStore {
   const service = new Uint16Array(capacity);
   const host = new Uint16Array(capacity);
   const hasPayload = new Uint8Array(capacity);
-  // Filled, so V8 keeps them as packed arrays rather than holey ones.
-  const message = new Array<string>(capacity).fill('');
-  const traceId = new Array<string | undefined>(capacity).fill(undefined);
-  const payload = new Array<Payload | undefined>(keepPayload ? capacity : 0).fill(undefined);
+  const message = packedArray<string>(capacity, '');
+  const traceId = packedArray<string | undefined>(capacity, undefined);
+  const payload = packedArray<Payload | undefined>(keepPayload ? capacity : 0, undefined);
   const services = createStringDictionary(dictionaryCapacity);
   const hosts = createStringDictionary(dictionaryCapacity);
 
@@ -175,17 +198,25 @@ export function createEventStore(options: EventStoreOptions): EventStore {
     if (total === 0) return;
     // Of an oversized batch only the newest `capacity` events would survive; skip the others.
     const skip = total > capacity ? total - capacity : 0;
+    const previousEnd = end;
     let slot = (end + skip) % capacity;
+
+    /** Rejects `events[index]`: keeps the events written before it and nothing unwritten. */
+    function reject(index: number, reason: string): TypeError {
+      advance(index);
+      // The skipped positions were never written, so the retained range starts after them.
+      if (skip > 0) start = Math.max(start, previousEnd + skip);
+      return new TypeError(reason);
+    }
+
     for (let index = skip; index < total; index++) {
       const event = events[index];
-      if (event === undefined) {
-        // Keep the events before the hole, so positions and slots stay consistent.
-        advance(index);
-        throw new TypeError('Event arrays must not have holes');
-      }
+      if (event === undefined) throw reject(index, 'Event arrays must not have holes');
+      const code = LEVEL_CODES.get(event.level);
+      if (code === undefined) throw reject(index, `Unknown log level ${event.level}`);
       seq[slot] = event.seq;
       ts[slot] = event.ts;
-      level[slot] = LEVELS.indexOf(event.level);
+      level[slot] = code;
       service[slot] = services.intern(event.service);
       host[slot] = hosts.intern(event.host);
       message[slot] = event.message;
@@ -245,9 +276,12 @@ export function createEventStore(options: EventStoreOptions): EventStore {
     advance(count);
   }
 
-  function takeColumnBatch(): ColumnBatch | undefined {
+  function takeColumnBatch(maxRows = MAX_COLUMN_BATCH_ROWS): ColumnBatch | undefined {
+    if (!Number.isInteger(maxRows) || maxRows < 1) {
+      throw new RangeError('maxRows must be a positive integer');
+    }
     const firstPosition = Math.max(taken, start);
-    const count = end - firstPosition;
+    const count = Math.min(end - firstPosition, maxRows);
     if (count <= 0) return undefined;
     const firstSlot = firstPosition % capacity;
 
@@ -286,7 +320,7 @@ export function createEventStore(options: EventStoreOptions): EventStore {
       batch.newHosts[index] = hosts.stringOf(takenHosts + index + 1);
     }
 
-    taken = end;
+    taken = firstPosition + count;
     takenServices = services.size;
     takenHosts = hosts.size;
     return batch;
