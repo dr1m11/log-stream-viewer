@@ -1,5 +1,11 @@
 import { createEventStore, type EventStore, type StreamCounters } from '@lsv/core';
-import { assertNever, type LogEvent, type StreamLimits, type StreamSettings } from '@lsv/protocol';
+import {
+  assertNever,
+  type LogEvent,
+  type Scenario,
+  type StreamLimits,
+  type StreamSettings,
+} from '@lsv/protocol';
 
 import { SOCKET_FAILURE_CODES, type StreamRequest } from '@/shared/api';
 
@@ -51,6 +57,28 @@ export type LogBufferView = Pick<
   | 'eventAt'
 >;
 
+/** A change of the stream settings; omitted fields stay as they are. */
+export interface StreamSettingsChange {
+  /** Events per second, an integer; the server clamps it to `limits`. */
+  readonly rate?: number;
+  readonly scenario?: Scenario;
+}
+
+/** The state of the settings changes the user asked for (`configure`). */
+export interface StreamSettingsRequests {
+  /**
+   * The latest change sent and not answered yet: the server's `config` with its `requestId`
+   * clears it (and updates `status.stream`), as do a `stream-error` and a new session.
+   */
+  readonly pending: (StreamSettingsChange & { readonly requestId: string }) | undefined;
+  /**
+   * Why the latest change was not applied (`code` is the server's open `error.code` or
+   * `not-connected`); `status.stream` still holds the effective settings. Cleared by the next
+   * `configure()` and by a new session.
+   */
+  readonly error: { readonly code: string; readonly message: string } | undefined;
+}
+
 /** What the UI shows. A new object only when a value changed, at most once per animation frame. */
 export interface LogStreamSnapshot {
   readonly status: ConnectionStatus;
@@ -69,6 +97,8 @@ export interface LogStreamSnapshot {
    * fell out of step with the worker's buffer), for the UI to mention; cleared by `start()`.
    */
   readonly error: string | undefined;
+  /** Settings changes in flight and the last one that failed. */
+  readonly settings: StreamSettingsRequests;
 }
 
 export interface LogStreamOptions {
@@ -90,6 +120,14 @@ export interface LogStreamStore {
   readonly start: () => void;
   /** Closes the connection, terminates the worker and cancels pending publications. */
   readonly stop: () => void;
+  /**
+   * Asks the server to change the stream's settings and publishes the request as
+   * `settings.pending` right away. Returns the request's id (`cfg-<n>`), or `undefined` without
+   * sending anything unless the stream is connected. Each call is one client message and the
+   * server closes a client that sends more than 20 per second (`docs/protocol.md`), so call it
+   * once per user commit, never per input event.
+   */
+  readonly configure: (change: StreamSettingsChange) => string | undefined;
 }
 
 /** The latest-event preview changes at most four times per second, so it stays readable. */
@@ -103,6 +141,7 @@ export const PREVIEW_INTERVAL_MS = 250;
 export const MAX_AUTO_RESTARTS = 3;
 
 const CONNECTING: ConnectionStatus = { phase: 'connecting' };
+const NO_SETTINGS_REQUESTS: StreamSettingsRequests = { pending: undefined, error: undefined };
 const NO_COUNTERS: StreamCounters = {
   received: 0,
   eventsPerSecond: 0,
@@ -175,6 +214,9 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
   let counters = NO_COUNTERS;
   let error: string | undefined;
   let autoRestarts = 0;
+  let settings = NO_SETTINGS_REQUESTS;
+  /** Numbers the `configure` request ids; never reset, so an id is unique per store. */
+  let configureRequests = 0;
   /** The event the preview shows, and the buffer end it was read at. */
   let preview: LogEvent | undefined;
   let previewEnd = 0;
@@ -188,6 +230,7 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
     end: 0,
     latest: undefined,
     error: undefined,
+    settings,
   };
 
   function notify(): void {
@@ -229,7 +272,8 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
       previous.start === start &&
       previous.end === end &&
       previous.latest === preview &&
-      previous.error === error
+      previous.error === error &&
+      previous.settings === settings
     ) {
       return;
     }
@@ -241,6 +285,7 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
       end,
       latest: preview,
       error,
+      settings,
     };
     notify();
   }
@@ -276,6 +321,20 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
         break;
       case 'counters':
         counters = data.counters;
+        break;
+      case 'config': {
+        const { requestId, rate, scenario } = data;
+        if (status.phase === 'connected') {
+          // A new `stream` object, so everything that shows the settings re-renders; `seed` stays.
+          status = { ...status, stream: { ...status.stream, rate, scenario } };
+        }
+        if (requestId !== undefined && requestId === settings.pending?.requestId) {
+          settings = { ...settings, pending: undefined };
+        }
+        break;
+      }
+      case 'stream-error':
+        settings = { pending: undefined, error: { code: data.code, message: data.message } };
         break;
       case 'closed':
         status = {
@@ -348,6 +407,7 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
     }
     status = CONNECTING;
     counters = NO_COUNTERS;
+    settings = NO_SETTINGS_REQUESTS;
     preview = undefined;
     previewEnd = 0;
     previewShownAt = Number.NEGATIVE_INFINITY;
@@ -386,6 +446,21 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
       // Anything still queued from the worker belongs to a session that is over.
       session++;
       cancelPending();
+    },
+    configure({ rate, scenario }) {
+      if (worker === undefined || status.phase !== 'connected') return undefined;
+      configureRequests++;
+      const requestId = `cfg-${String(configureRequests)}`;
+      worker.postMessage({ type: 'configure', session, requestId, rate, scenario });
+      settings = { pending: { requestId, rate, scenario }, error: undefined };
+      // Publish now rather than on the next frame: the control that asked shows the pending
+      // value at once instead of flashing back to the effective one for a frame.
+      if (frame !== undefined) {
+        cancelAnimationFrame(frame);
+        frame = undefined;
+      }
+      publish();
+      return requestId;
     },
   };
 }
