@@ -480,7 +480,7 @@ describe('LogGrid', () => {
       });
       const view = render(withTooltips(<LogGrid {...props(undefined)} getEvent={fetchEvent} />));
       return {
-        grid: screen.getByRole('grid', { name: 'Events' }),
+        grid: screen.getByRole('treegrid', { name: 'Events' }),
         /** A new snapshot: paused at `pausedEnd`, or following the stream without it. */
         update: (pausedEnd?: number): void => {
           view.rerender(withTooltips(<LogGrid {...props(pausedEnd)} getEvent={fetchEvent} />));
@@ -563,6 +563,45 @@ describe('LogGrid', () => {
       update();
       expect(dataRows(grid).at(-1)).toHaveTextContent('event 730');
       expect(grid.scrollTop).toBe(maxScrollTop(grid));
+    });
+
+    it('keeps open details in place, with their DOM node, while paused and evicting', async () => {
+      const user = userEvent.setup();
+      const { buffer, append } = createBuffer(1000);
+      append(1000);
+      const { grid, update } = renderPausable(buffer);
+      update(1000);
+      // Event 501 (position 500) at the top of the view; open event 505 in view.
+      scrollTo(grid, 500 * ROW_HEIGHT);
+      const toggle = within(grid)
+        .getAllByText('event 505')[0]
+        ?.closest('[role="row"]')
+        ?.querySelector('[data-details-toggle]');
+      if (!(toggle instanceof HTMLElement)) throw new Error('No disclosure button for event 505');
+      await user.click(toggle);
+      const details = await screen.findByRole('region', { name: 'Details of event #505' });
+      /** Offset of the open row's line from the top of the view (its screen position). */
+      const openRowOnScreen = (): number => (504 - buffer.start) * ROW_HEIGHT - grid.scrollTop;
+      expect(openRowOnScreen()).toBe(4 * ROW_HEIGHT);
+
+      // Rows evicted above an open row in view: it stays where it is on screen.
+      append(100);
+      update(1000);
+      expect(screen.getByRole('region', { name: 'Details of event #505' })).toBe(details);
+      expect(openRowOnScreen()).toBe(4 * ROW_HEIGHT);
+      expect(screen.queryByRole('button', { name: 'Jump to latest' })).not.toBeInTheDocument();
+
+      // Scrolled past the open row: its details sit above the view, and the rows in view (event 511
+      // at the top) stay put as more rows are evicted.
+      scrollTo(grid, 410 * ROW_HEIGHT + DETAILS_HEIGHT);
+      const message = within(grid).getByText('event 511');
+      append(50);
+      update(1000);
+      expect(grid.scrollTop).toBe(360 * ROW_HEIGHT + DETAILS_HEIGHT);
+      expect(within(grid).getByText('event 511')).toBe(message);
+      expect(screen.getByRole('region', { name: 'Details of event #505' })).toBe(details);
+      // Still paused: the view ends at the pause point.
+      expect(grid).toHaveAttribute('aria-rowcount', String(1000 - 150 + 1));
     });
 
     it('says why the paused view is empty once eviction passed the pause point', () => {

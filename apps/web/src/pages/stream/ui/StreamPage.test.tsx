@@ -252,7 +252,7 @@ describe('StreamPage', () => {
     const user = userEvent.setup();
     const { worker } = await renderConnected();
     const encode = createSource();
-    const grid = screen.getByRole('grid', { name: 'Events' });
+    const grid = screen.getByRole('treegrid', { name: 'Events' });
     post(worker, {
       type: 'batch',
       session: 0,

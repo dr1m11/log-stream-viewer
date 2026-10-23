@@ -37,7 +37,7 @@ describe('isPauseShortcut', () => {
     expect(isPauseShortcut(keydown({ key: 'P' }))).toBe(true);
     expect(isPauseShortcut(keydown({ target: mount('<button>Other</button>') }))).toBe(true);
     expect(
-      isPauseShortcut(keydown({ target: mount('<div role="grid" tabindex="0"></div>') })),
+      isPauseShortcut(keydown({ target: mount('<div role="treegrid" tabindex="0"></div>') })),
     ).toBe(true);
   });
 
