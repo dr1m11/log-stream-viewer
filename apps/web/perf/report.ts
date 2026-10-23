@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { cpus, platform, release, totalmem } from 'node:os';
 import { dirname, resolve } from 'node:path';
@@ -22,11 +23,32 @@ export interface PerfReport {
   browser: string;
   /** DevTools CPU throttling of the page's main thread during the measurements (1: none). */
   cpuThrottle: number;
-  /** Display refresh rate as Chromium paces animation frames: 1000 / median frame interval. */
+  /**
+   * Approximate display refresh rate as Chromium paces animation frames: 1000 / `vsyncMs` of the
+   * first following window, rounded. FPS equal to it (±1) means no dropped frames.
+   */
   refreshHz: number;
+  /** The measured code: `HEAD` and whether the working tree had uncommitted changes. */
+  commit: { sha: string; dirty: boolean };
   fillRate: number;
   measuredRate: number;
   results: SizeResult[];
+}
+
+/** `HEAD` of the checkout and whether it has uncommitted changes (`unknown` outside git). */
+export function commitInfo(): PerfReport['commit'] {
+  try {
+    const git = (...args: string[]) => execFileSync('git', args, { encoding: 'utf8' }).trim();
+    return { sha: git('rev-parse', 'HEAD'), dirty: git('status', '--porcelain') !== '' };
+  } catch {
+    return { sha: 'unknown', dirty: false };
+  }
+}
+
+/** One line of run conditions above the table: browser, display, throttling, commit. */
+export function conditionsLine(report: PerfReport): string {
+  const commit = `${report.commit.sha.slice(0, 7)}${report.commit.dirty ? ' (dirty)' : ''}`;
+  return `${report.browser}, ≈${String(report.refreshHz)} Hz, CPU throttle ${String(report.cpuThrottle)}×, commit ${commit}`;
 }
 
 export function machineInfo(): PerfReport['machine'] {

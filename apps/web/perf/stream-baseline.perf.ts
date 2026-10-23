@@ -9,6 +9,8 @@ import {
   readInteractions,
 } from './page-probes';
 import {
+  commitInfo,
+  conditionsLine,
   machineInfo,
   markdownTable,
   type PerfReport,
@@ -74,14 +76,14 @@ test.afterAll(() => {
     machine: machineInfo(),
     browser: `Chromium ${browserVersion} (new headless)`,
     cpuThrottle: CPU_THROTTLE,
-    refreshHz: Math.round(1000 / (results[0]?.following.p50Ms ?? 1000)),
+    refreshHz: Math.round(1000 / (results[0]?.following.vsyncMs ?? 1000)),
+    commit: commitInfo(),
     fillRate: FILL_RATE,
     measuredRate: MEASURED_RATE,
     results,
   };
   const path = writeReport(report);
-  const conditions = `${report.browser}, ${String(report.refreshHz)} Hz, CPU throttle ${String(CPU_THROTTLE)}×`;
-  console.log(`\n${conditions}\n\n${markdownTable(report)}\n\nJSON: ${path}\n`);
+  console.log(`\n${conditionsLine(report)}\n\n${markdownTable(report)}\n\nJSON: ${path}\n`);
 });
 
 for (const rows of SIZES) {
@@ -139,8 +141,13 @@ for (const rows of SIZES) {
     const interactions = await readInteractions(page);
 
     const missedEvents = await counter(page, 'Missed events');
+    // Validity: a run that lost events, did not scroll or missed the worker measures nothing.
     expect(missedEvents, 'events lost on the way: the numbers would not be valid').toBe(0);
     expect(following.frames).toBeGreaterThan(0);
+    expect(scrolling.scrolledPx, 'the table did not scroll at the scripted pace').toBeGreaterThan(
+      (0.8 * Math.abs(SCROLL_PX_PER_SECOND) * WINDOW_MS) / 1000,
+    );
+    expect(memory.worker, 'the stream worker was not attached for the heap').toBeDefined();
     results.push({
       rows,
       fillSeconds,

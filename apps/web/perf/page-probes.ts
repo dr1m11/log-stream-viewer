@@ -54,6 +54,12 @@ export interface FrameStats {
   p50Ms: number;
   p95Ms: number;
   maxMs: number;
+  /**
+   * The display's frame interval: the mean of the intervals within ±25% of the median. Frame
+   * timestamps are rounded to 0.1 ms, so a single interval (or the median) of a 144 Hz display
+   * reads 6.9 or 7.0 ms; the mean of the regular frames does not.
+   */
+  vsyncMs: number;
   /** Frames longer than 20 ms: below 50 FPS, a visible hitch at any refresh rate. */
   over20Ms: number;
   /** Distance the table actually scrolled, to tell a scroll run from one stuck at an edge. */
@@ -109,8 +115,17 @@ export function measureFrames(table: Locator, options: FrameOptions): Promise<Fr
           const sorted = intervals.slice(0, count).sort();
           const at = (quantile: number) =>
             sorted[Math.min(count - 1, Math.floor(quantile * count))] ?? 0;
+          const median = at(0.5);
           let over20Ms = 0;
-          for (const interval of sorted) if (interval > 20) over20Ms += 1;
+          let regularSum = 0;
+          let regularCount = 0;
+          for (const interval of sorted) {
+            if (interval > 20) over20Ms += 1;
+            if (Math.abs(interval - median) <= median * 0.25) {
+              regularSum += interval;
+              regularCount += 1;
+            }
+          }
           const tasks = (window.__lsvPerf?.longTasks ?? []).filter(
             (task) => task.start >= begin && task.start < now,
           );
@@ -118,9 +133,10 @@ export function measureFrames(table: Locator, options: FrameOptions): Promise<Fr
             durationMs: now - begin,
             frames: count,
             fps: (count * 1000) / (now - begin),
-            p50Ms: at(0.5),
+            p50Ms: median,
             p95Ms: at(0.95),
             maxMs: sorted[count - 1] ?? 0,
+            vsyncMs: regularCount === 0 ? median : regularSum / regularCount,
             over20Ms,
             scrolledPx,
             longTasks: {
