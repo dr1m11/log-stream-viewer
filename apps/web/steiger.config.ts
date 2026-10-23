@@ -45,4 +45,12 @@ export default defineConfig([
       'fsd/insignificant-slice': 'off',
     },
   },
+  {
+    // Pausing the stream view is a user action with its own shortcut, model glue and tests; the
+    // single page is its only consumer until other views of the stream (search results) arrive.
+    files: ['./src/features/pause-stream/**'],
+    rules: {
+      'fsd/insignificant-slice': 'off',
+    },
+  },
 ]);

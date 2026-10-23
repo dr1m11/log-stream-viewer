@@ -543,4 +543,132 @@ describe('createLogStreamStore', () => {
     });
     expect(failed.terminated).toBe(true);
   });
+
+  describe('pause', () => {
+    /** A connected store that has received `count` events (seq 1…count) in one frame. */
+    function setupWithEvents(capacity: number, count: number) {
+      const harness = setup(capacity);
+      const encode = createSource(capacity);
+      let nextSeq = 1;
+      /** The worker posts `n` more events. */
+      const receive = (n: number): void => {
+        harness.send({
+          type: 'batch',
+          session: 1,
+          columns: encode(seqs(nextSeq, n)),
+          counters: counters({ received: nextSeq + n - 1 }),
+        });
+        nextSeq += n;
+      };
+      harness.hello();
+      receive(count);
+      nextFrame();
+      return { ...harness, receive };
+    }
+
+    it('freezes the view at the published range and publishes at once', () => {
+      const { store, listener, receive } = setupWithEvents(1000, 100);
+      // A batch after the last frame: in the replica, not yet on screen.
+      receive(10);
+      listener.mockClear();
+
+      store.pause();
+
+      expect(listener).toHaveBeenCalledOnce();
+      expect(store.getSnapshot()).toMatchObject({ paused: { start: 0, end: 100 }, end: 110 });
+    });
+
+    it('keeps receiving while paused: end grows, the pause point stays', () => {
+      const { store, receive } = setupWithEvents(1000, 100);
+      store.pause();
+
+      receive(50);
+      nextFrame();
+      receive(50);
+      nextFrame();
+
+      const snapshot = store.getSnapshot();
+      expect(snapshot).toMatchObject({
+        start: 0,
+        end: 200,
+        paused: { start: 0, end: 100 },
+        counters: { received: 200 },
+      });
+      expect(snapshot.buffer.messageAt(199)).toBe('event 200');
+    });
+
+    it('keeps evicting at the capacity while paused', () => {
+      const { store, receive } = setupWithEvents(1000, 1000);
+      store.pause();
+
+      receive(300);
+      nextFrame();
+
+      const { start, end, buffer, paused } = store.getSnapshot();
+      expect([start, end, buffer.size]).toEqual([300, 1300, 1000]);
+      expect(paused).toEqual({ start: 0, end: 1000 });
+    });
+
+    it('ignores a second pause, so the pause point stays where the user paused', () => {
+      const { store, listener, receive } = setupWithEvents(1000, 100);
+      store.pause();
+      receive(50);
+      nextFrame();
+      listener.mockClear();
+
+      store.pause();
+
+      expect(listener).not.toHaveBeenCalled();
+      expect(store.getSnapshot().paused).toEqual({ start: 0, end: 100 });
+    });
+
+    it('clears the pause on resume and publishes at once', () => {
+      const { store, listener, receive } = setupWithEvents(1000, 100);
+      store.pause();
+      receive(50);
+      nextFrame();
+      listener.mockClear();
+
+      store.resume();
+
+      expect(listener).toHaveBeenCalledOnce();
+      expect(store.getSnapshot()).toMatchObject({ paused: undefined, end: 150 });
+
+      store.resume();
+      expect(listener).toHaveBeenCalledOnce();
+    });
+
+    it('clears the pause when a new session starts', () => {
+      const { store } = setupWithEvents(1000, 100);
+      store.pause();
+
+      store.start();
+
+      expect(store.getSnapshot()).toMatchObject({ paused: undefined, start: 0, end: 0 });
+    });
+
+    it('clears the pause when the store restarts the session on its own', () => {
+      const { store, send } = setupWithEvents(1000, 100);
+      store.pause();
+
+      // A batch that does not continue the replica: the store restarts with a new session.
+      send({ type: 'batch', session: 1, columns: createSource()([1]), counters: counters() });
+      nextFrame();
+
+      expect(store.getSnapshot()).toMatchObject({
+        status: { phase: 'connecting' },
+        paused: undefined,
+      });
+    });
+
+    it('pauses an empty view right after an automatic restart, before the next frame', () => {
+      const { store, send } = setupWithEvents(1000, 100);
+      send({ type: 'batch', session: 1, columns: createSource()([1]), counters: counters() });
+
+      // The snapshot still shows the old session's 100 rows; the new replica is empty.
+      store.pause();
+
+      expect(store.getSnapshot()).toMatchObject({ paused: { start: 0, end: 0 }, end: 0 });
+    });
+  });
 });

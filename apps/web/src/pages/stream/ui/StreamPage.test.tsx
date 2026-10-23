@@ -6,11 +6,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { FromWorkerMessage } from '@/entities/log-stream';
 import { FakeWorker, testBatch, testHello } from '@/shared/lib/testing';
+import { TooltipProvider } from '@/shared/ui/tooltip';
 
 import { StreamPage } from './StreamPage';
 
 function counters(overrides: Partial<StreamCounters> = {}): StreamCounters {
   return { received: 0, eventsPerSecond: 0, missed: 0, dropped: 0, invalidFrames: 0, ...overrides };
+}
+
+/** Renders the page inside the tooltip provider that `App` mounts. */
+function renderPage() {
+  return render(
+    <TooltipProvider delayDuration={0}>
+      <StreamPage />
+    </TooltipProvider>,
+  );
 }
 
 /** Encodes `testBatch(seqs)` as the stream worker posts it, positions continuing per source. */
@@ -59,7 +69,7 @@ function hello(worker: FakeWorker): void {
 
 /** Renders the page and lets its (fake) worker report the server's `hello`. */
 async function renderConnected() {
-  const view = render(<StreamPage />);
+  const view = renderPage();
   const worker = FakeWorker.latest();
   hello(worker);
   await screen.findByText('Connected');
@@ -89,7 +99,7 @@ describe('StreamPage', () => {
       '/?rate=500&scenario=error-burst&seed=7&buffer=250000&utm_source=x',
     );
 
-    render(<StreamPage />);
+    renderPage();
 
     const worker = FakeWorker.latest();
     expect(worker.url).toMatch(/stream\.worker\.ts/);
@@ -106,7 +116,7 @@ describe('StreamPage', () => {
   });
 
   it('announces the connection status from connecting to connected', async () => {
-    render(<StreamPage />);
+    renderPage();
     const status = screen.getByRole('status');
     expect(status).toHaveTextContent('Connecting…');
 
@@ -135,7 +145,7 @@ describe('StreamPage', () => {
   });
 
   it('shows a stream worker that failed in the status, not as a crash', async () => {
-    render(<StreamPage />);
+    renderPage();
 
     act(() => {
       FakeWorker.latest().fail('Script error');
@@ -148,9 +158,12 @@ describe('StreamPage', () => {
   });
 
   it('keeps one live worker through the StrictMode double mount', async () => {
+    // StrictMode outermost, as in main.tsx: nested inside the provider, the effects ran only once here.
     const { unmount } = render(
       <StrictMode>
-        <StreamPage />
+        <TooltipProvider delayDuration={0}>
+          <StreamPage />
+        </TooltipProvider>
       </StrictMode>,
     );
     expect(FakeWorker.instances).toHaveLength(2);
@@ -227,11 +240,70 @@ describe('StreamPage', () => {
 
   it('switches the colour theme from the header', async () => {
     const user = userEvent.setup();
-    render(<StreamPage />);
+    renderPage();
 
     await user.click(screen.getByRole('radio', { name: 'Dark' }));
 
     expect(screen.getByRole('radio', { name: 'Dark' })).toBeChecked();
     expect(document.documentElement.dataset.theme).toBe('dark');
+  });
+
+  it('freezes the table while paused and shows every event received meanwhile on resume', async () => {
+    const user = userEvent.setup();
+    const { worker } = await renderConnected();
+    const encode = createSource();
+    const grid = screen.getByRole('grid', { name: 'Events' });
+    post(worker, {
+      type: 'batch',
+      session: 0,
+      columns: encode([1, 2, 3]),
+      counters: counters({ received: 3 }),
+    });
+    await waitFor(() => {
+      expect(grid).toHaveAttribute('aria-rowcount', '4');
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Pause stream' }));
+    post(worker, {
+      type: 'batch',
+      session: 0,
+      columns: encode([4, 5]),
+      counters: counters({ received: 5 }),
+    });
+    await waitFor(() => {
+      expect(counter('Events received')).toBe('5');
+    });
+    expect(screen.getByText('2 new events')).toBeVisible();
+    // jsdom has no layout, so the grid renders no rows; its row count shows what it lists.
+    expect(grid).toHaveAttribute('aria-rowcount', '4');
+
+    post(worker, {
+      type: 'batch',
+      session: 0,
+      columns: encode([6, 7, 8, 9]),
+      counters: counters({ received: 9 }),
+    });
+    expect(await screen.findByText('6 new events')).toBeVisible();
+    expect(grid).toHaveAttribute('aria-rowcount', '4');
+
+    await user.click(screen.getByRole('button', { name: 'Resume' }));
+
+    expect(grid).toHaveAttribute('aria-rowcount', '10');
+    expect(screen.queryByText(/new events$/)).not.toBeInTheDocument();
+  });
+
+  it('pauses with the P key, but not while typing a rate', async () => {
+    const user = userEvent.setup();
+    await renderConnected();
+    const pause = screen.getByRole('button', { name: 'Pause stream' });
+    const rate = screen.getByRole('spinbutton', { name: 'Exact rate, events per second' });
+
+    await user.type(rate, 'p');
+    expect(pause).toHaveAttribute('aria-pressed', 'false');
+
+    await user.click(screen.getByRole('heading', { name: 'Log Stream Viewer' }));
+    await user.keyboard('p');
+    expect(pause).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('0 new events')).toBeVisible();
   });
 });

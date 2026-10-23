@@ -75,6 +75,20 @@ export interface StreamSettingsRequests {
   readonly error: { readonly code: string; readonly message: string } | undefined;
 }
 
+/**
+ * Where the user paused the view (`pause()`): the buffer range the table showed at that moment.
+ * The buffer keeps receiving and evicting while paused; only the view holds still.
+ */
+export interface PausedView {
+  /**
+   * `start` when paused: the oldest row the user could scroll to. Once the buffer's `start` passes
+   * it, rows of the paused view (and then events received during the pause) are being evicted.
+   */
+  readonly start: number;
+  /** `end` when paused: the table shows no row at or after this position until `resume()`. */
+  readonly end: number;
+}
+
 /** What the UI shows. A new object only when a value changed, at most once per animation frame. */
 export interface LogStreamSnapshot {
   readonly status: ConnectionStatus;
@@ -93,6 +107,8 @@ export interface LogStreamSnapshot {
   readonly error: string | undefined;
   /** Settings changes in flight and the last one that failed. */
   readonly settings: StreamSettingsRequests;
+  /** The paused view, or `undefined` while the view follows the stream; cleared by a new session. */
+  readonly paused: PausedView | undefined;
 }
 
 export interface LogStreamOptions {
@@ -122,6 +138,14 @@ export interface LogStreamStore {
    * once per user commit, never per input event.
    */
   readonly configure: (change: StreamSettingsChange) => string | undefined;
+  /**
+   * Freezes the view at the range of the current snapshot (`paused`) and publishes at once. Only
+   * the view: the worker and the replica keep receiving, and the replica keeps evicting at its
+   * capacity. Does nothing while already paused.
+   */
+  readonly pause: () => void;
+  /** Lets the view follow the stream again (`paused` becomes `undefined`) and publishes at once. */
+  readonly resume: () => void;
 }
 
 /**
@@ -207,6 +231,7 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
   let settings = NO_SETTINGS_REQUESTS;
   /** Numbers the `configure` request ids; never reset, so an id is unique per store. */
   let configureRequests = 0;
+  let paused: PausedView | undefined;
 
   let snapshot: LogStreamSnapshot = {
     status,
@@ -216,6 +241,7 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
     end: 0,
     error: undefined,
     settings,
+    paused,
   };
 
   function notify(): void {
@@ -242,7 +268,8 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
       previous.start === start &&
       previous.end === end &&
       previous.error === error &&
-      previous.settings === settings
+      previous.settings === settings &&
+      previous.paused === paused
     ) {
       return;
     }
@@ -254,8 +281,15 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
       end,
       error,
       settings,
+      paused,
     };
     notify();
+  }
+
+  /** Publishes now instead of on the next frame, for a change the user just made. */
+  function publishNow(): void {
+    cancelPending();
+    publish();
   }
 
   function cancelPending(): void {
@@ -372,6 +406,7 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
     status = CONNECTING;
     counters = NO_COUNTERS;
     settings = NO_SETTINGS_REQUESTS;
+    paused = undefined;
     if (worker === undefined) {
       worker = spawnWorker();
       worker.onmessage = receive;
@@ -426,12 +461,24 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
       };
       // Publish now rather than on the next frame: the control that asked shows the pending
       // value at once instead of flashing back to the effective one for a frame.
-      if (frame !== undefined) {
-        cancelAnimationFrame(frame);
-        frame = undefined;
-      }
-      publish();
+      publishNow();
       return requestId;
+    },
+    pause() {
+      if (paused !== undefined) return;
+      // Freeze what the user sees: the published range, not the replica, which may already hold
+      // rows of batches that arrived after the last frame. Right after a restart the snapshot may
+      // still show the old session's buffer; then the new (empty) replica is the view.
+      paused =
+        snapshot.buffer === view
+          ? { start: snapshot.start, end: snapshot.end }
+          : { start: buffer.start, end: buffer.end };
+      publishNow();
+    },
+    resume() {
+      if (paused === undefined) return;
+      paused = undefined;
+      publishNow();
     },
   };
 }

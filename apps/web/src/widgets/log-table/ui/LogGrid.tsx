@@ -48,6 +48,12 @@ export interface LogGridProps {
   readonly start: number;
   /** Position after the last row to show. */
   readonly end: number;
+  /**
+   * The stream view is paused: the caller holds `end` still, and the grid stops following (rows
+   * keyed by position, anchored while `start` grows) and hides "Jump to latest". When it turns
+   * false again the grid jumps to the newest row and follows.
+   */
+  readonly paused?: boolean;
 }
 
 /**
@@ -73,11 +79,11 @@ export interface LogGridProps {
  * rebuilds its measurements in O(count) whenever the count changes (11 ms per batch near 1M rows);
  * with a fixed count that happens once per buffer.
  */
-export function LogGrid({ buffer, start, end }: LogGridProps) {
+export function LogGrid({ buffer, start, end, paused = false }: LogGridProps) {
   const headingId = useId();
   const rowBaseId = useId();
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [following, setFollowing] = useState(true);
+  const [following, setFollowing] = useState(!paused);
   /** Position of the keyboard cursor; may fall out of `[start, end)` through eviction. */
   const [active, setActive] = useState<number | undefined>(undefined);
 
@@ -89,6 +95,17 @@ export function LogGrid({ buffer, start, end }: LogGridProps) {
     setActive(undefined);
   }
 
+  // Pausing holds the rows in view where they are; resuming returns to the tail.
+  const [shownPaused, setShownPaused] = useState(paused);
+  if (paused !== shownPaused) {
+    setShownPaused(paused);
+    setFollowing(!paused);
+  }
+  // Whether the grid tracks the tail: never while paused. A scroll to the bottom, End or a click on
+  // the last row still sets `following` then, but pinning and index keys would make every row in
+  // view change its element each frame as `start` grows, collapsing a selection.
+  const tracking = following && !paused;
+
   /** The virtualizer's scroll listener, to report the grid's own writes without delay. */
   const offsetListenerRef = useRef<OffsetListener | undefined>(undefined);
   /** The offset of the grid's last scroll write until its scroll event arrives. */
@@ -99,8 +116,8 @@ export function LogGrid({ buffer, start, end }: LogGridProps) {
   const laidOutRef = useRef({ buffer, start });
   /** Height of the scroll viewport (header included), from the virtualizer's resize observer. */
   const viewportHeightRef = useRef(0);
-  /** `following` and the row count of the last commit, for the resize observer. */
-  const followingRef = useRef(following);
+  /** `tracking` and the row count of the last commit, for the resize observer. */
+  const followingRef = useRef(tracking);
   const countRef = useRef(end - start);
 
   const observeOffset = useCallback(
@@ -170,10 +187,10 @@ export function LogGrid({ buffer, start, end }: LogGridProps) {
     const element = scrollRef.current;
     const previous = laidOutRef.current;
     laidOutRef.current = { buffer, start };
-    followingRef.current = following;
+    followingRef.current = tracking;
     countRef.current = end - start;
     if (element === null) return;
-    if (following) {
+    if (tracking) {
       pinToBottom(element);
     } else if (previous.buffer === buffer && start > previous.start) {
       writeScrollTop(
@@ -181,7 +198,7 @@ export function LogGrid({ buffer, start, end }: LogGridProps) {
         anchorScrollTop(lastScrollTopRef.current, start - previous.start, ROW_HEIGHT),
       );
     }
-  }, [buffer, start, end, following, pinToBottom, writeScrollTop]);
+  }, [buffer, start, end, tracking, pinToBottom, writeScrollTop]);
 
   function handleScroll(event: UIEvent<HTMLDivElement>): void {
     const element = event.currentTarget;
@@ -215,7 +232,7 @@ export function LogGrid({ buffer, start, end }: LogGridProps) {
       start,
       end,
       pageRows: Math.max(1, Math.floor(viewport / ROW_HEIGHT) - 1),
-      following,
+      following: tracking,
       firstVisible: start + Math.ceil(element.scrollTop / ROW_HEIGHT),
     });
     if (next === undefined) return;
@@ -260,7 +277,7 @@ export function LogGrid({ buffer, start, end }: LogGridProps) {
   // render synchronously.
 
   const laidOut = laidOutRef.current;
-  if (!following && laidOut.buffer === buffer && start > laidOut.start) {
+  if (!tracking && laidOut.buffer === buffer && start > laidOut.start) {
     firstIndex = Math.max(0, firstIndex - (start - laidOut.start));
   }
   const lastIndex = Math.min(firstIndex + span, count - 1);
@@ -282,7 +299,7 @@ export function LogGrid({ buffer, start, end }: LogGridProps) {
     const position = start + index;
     rows.push(
       <LogRow
-        key={following ? `i${String(index)}` : `p${String(position)}`}
+        key={tracking ? `i${String(index)}` : `p${String(position)}`}
         buffer={buffer}
         position={position}
         index={index}
@@ -353,10 +370,12 @@ export function LogGrid({ buffer, start, end }: LogGridProps) {
         </div>
         {count === 0 && (
           <p className="pointer-events-none absolute inset-x-0 top-14 text-center text-sm text-fg-muted">
-            Waiting for events…
+            {paused
+              ? 'Paused: no events to show. Resume to see the newest.'
+              : 'Waiting for events…'}
           </p>
         )}
-        {!following && (
+        {!following && !paused && (
           <Button
             variant="primary"
             size="sm"

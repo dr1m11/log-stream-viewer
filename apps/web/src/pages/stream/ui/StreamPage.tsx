@@ -1,5 +1,6 @@
 import { useLogStreamStore } from '@/entities/log-stream';
 import { StreamSettingsControls } from '@/features/configure-stream';
+import { PauseStreamControls } from '@/features/pause-stream';
 import { ThemeToggle } from '@/features/toggle-theme';
 import { STREAM_URL } from '@/shared/config';
 import { LogTable } from '@/widgets/log-table';
@@ -41,6 +42,7 @@ export function StreamPage() {
       <main className="mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col gap-4 px-4 py-4">
         <StreamSettingsControls store={store} />
         <StreamStats store={store} />
+        <PauseStreamControls store={store} />
         <LogTable store={store} />
       </main>
     </div>
