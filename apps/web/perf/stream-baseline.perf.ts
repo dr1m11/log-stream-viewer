@@ -47,14 +47,15 @@ const NUMBER_FORMAT = new Intl.NumberFormat('en-US');
 const results: SizeResult[] = [];
 let browserVersion = 'unknown';
 
-/** The events table, whether it is a grid or (with expandable rows) a treegrid. */
+/** The events table: a treegrid, whose element is also the scroll container. */
 function eventsTable(page: Page): Locator {
-  return page
-    .getByRole('grid', { name: 'Events' })
-    .or(page.getByRole('treegrid', { name: 'Events' }));
+  return page.getByRole('treegrid', { name: 'Events' });
 }
 
-/** Data rows in the table (its `aria-rowcount` less the header row). */
+/**
+ * Event rows in the table: its `aria-rowcount` less the header row. The run never opens a row,
+ * so there is no details row to subtract.
+ */
 async function rowCount(table: Locator): Promise<number> {
   return Number(await table.getAttribute('aria-rowcount')) - 1;
 }

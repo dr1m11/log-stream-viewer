@@ -18,14 +18,15 @@ async function counter(page: Page, name: string): Promise<number> {
   );
 }
 
-/** The events table, whether it is a grid or (with expandable rows) a treegrid. */
+/** The events table: a treegrid, whose element is also the scroll container. */
 function eventsTable(page: Page): Locator {
-  return page
-    .getByRole('grid', { name: 'Events' })
-    .or(page.getByRole('treegrid', { name: 'Events' }));
+  return page.getByRole('treegrid', { name: 'Events' });
 }
 
-/** Data rows in the table (its `aria-rowcount` less the header row). */
+/**
+ * Event rows in the table: its `aria-rowcount` less the header row. No row is opened here, so
+ * there is no details row to subtract.
+ */
 async function rowCount(table: Locator): Promise<number> {
   return Number(await table.getAttribute('aria-rowcount')) - 1;
 }
@@ -53,7 +54,8 @@ function rowsMinusReceived(table: Locator): Promise<number> {
 }
 
 test.describe('stream scenarios', () => {
-  // Product spec §2, scenarios 1, 2 and 5 as one visit; scenario 4 (details) has its own spec.
+  // Product spec §2, scenarios 1, 2 and 5 as one visit; scenario 4 (an event's details) is
+  // event-details.spec.ts.
   test('follows the live tail, keeps up with a higher rate and loses nothing across a pause', async ({
     page,
     expectNoA11yViolations,
