@@ -25,9 +25,11 @@ test.describe('smoke', () => {
     const before = await counter(page, 'Events received');
     await expect.poll(() => counter(page, 'Events received')).toBeGreaterThan(before);
     await expect.poll(() => counter(page, 'Events per second')).toBeGreaterThan(0);
-    await expect(page.getByRole('region', { name: 'Latest event' })).not.toContainText(
-      'No events yet.',
-    );
+    // The table lists the events and follows the newest one.
+    const rows = page.getByRole('grid', { name: 'Events' }).getByRole('row');
+    await expect(rows.nth(1)).toBeVisible();
+    const newest = (await rows.last().textContent()) ?? '';
+    await expect(rows.last()).not.toHaveText(newest);
 
     await expectNoA11yViolations();
   });

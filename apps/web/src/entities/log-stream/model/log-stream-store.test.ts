@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeWorker, testBatch, testHello } from '@/shared/lib/testing';
 
 import type { FromWorkerMessage } from '../api/worker-protocol';
-import { createLogStreamStore, MAX_AUTO_RESTARTS, PREVIEW_INTERVAL_MS } from './log-stream-store';
+import { createLogStreamStore, MAX_AUTO_RESTARTS } from './log-stream-store';
 
 const ENDPOINT = 'ws://localhost:8787/ws';
 
@@ -196,25 +196,6 @@ describe('createLogStreamStore', () => {
     expect(store.getSnapshot().counters).toMatchObject({ eventsPerSecond: 0, received: 50 });
   });
 
-  it('refreshes the latest-event preview at most every 250 ms, and catches up afterwards', () => {
-    const { store, send, hello } = setup();
-    const encode = createSource();
-    hello();
-
-    send({ type: 'batch', session: 1, columns: encode([1, 2]), counters: counters() });
-    nextFrame();
-    expect(store.getSnapshot().latest?.seq).toBe(2);
-
-    vi.advanceTimersByTime(50);
-    send({ type: 'batch', session: 1, columns: encode([3, 4]), counters: counters() });
-    nextFrame();
-    expect(store.getSnapshot()).toMatchObject({ end: 4, latest: { seq: 2 } });
-
-    // No further batches: the preview still shows the newest event once the interval is over.
-    vi.advanceTimersByTime(PREVIEW_INTERVAL_MS);
-    expect(store.getSnapshot().latest).toEqual(testBatch([4]).events[0]);
-  });
-
   it('starts over with a new session, buffer and counters on start(), dropping old messages', () => {
     const { store, listener, worker, send, hello } = setup();
     const encode = createSource();
@@ -240,7 +221,6 @@ describe('createLogStreamStore', () => {
       counters: { received: 0 },
       start: 0,
       end: 0,
-      latest: undefined,
     });
     expect(snapshot.buffer).not.toBe(first);
 

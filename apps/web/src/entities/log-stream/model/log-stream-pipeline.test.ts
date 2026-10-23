@@ -75,7 +75,6 @@ describe('the stream pipeline (store, worker host and socket)', () => {
       start: 0,
       end: 5,
       counters: { received: 5, missed: 1 },
-      latest: { seq: 6 },
     });
     // The replica has no payloads; the rows match what the server sent.
     expect(snapshot.buffer.eventAt(3)).toEqual(testLogEvent(5));

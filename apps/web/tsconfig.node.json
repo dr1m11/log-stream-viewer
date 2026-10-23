@@ -9,7 +9,6 @@
     "vitest.config.ts",
     "playwright.config.ts",
     "steiger.config.ts",
-    "build",
-    "e2e"
+    "build"
   ]
 }

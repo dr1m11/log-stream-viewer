@@ -29,4 +29,20 @@ export default defineConfig([
       'fsd/insignificant-slice': 'off',
     },
   },
+  {
+    // The event presentation (time, level) has one consumer, the table, until the details view of
+    // B2 (expanded rows) and the search results of B3 show events too.
+    files: ['./src/entities/log-event/**'],
+    rules: {
+      'fsd/insignificant-slice': 'off',
+    },
+  },
+  {
+    // The table has one consumer, the single page, but it is a self-contained block with its own
+    // state, scroll logic and tests that composes two entities (the stream and its events).
+    files: ['./src/widgets/log-table/**'],
+    rules: {
+      'fsd/insignificant-slice': 'off',
+    },
+  },
 ]);

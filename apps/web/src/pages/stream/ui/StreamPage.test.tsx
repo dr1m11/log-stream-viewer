@@ -178,7 +178,7 @@ describe('StreamPage', () => {
     expect(second.terminated).toBe(true);
   });
 
-  it('shows the counters and previews the newest event', async () => {
+  it('shows the counters and lists the events in the table', async () => {
     const { worker } = await renderConnected();
     const encode = createSource();
 
@@ -202,10 +202,8 @@ describe('StreamPage', () => {
     expect(counter('Dropped by server')).toBe('1');
     expect(counter('Invalid frames')).toBe('0');
     expect(counter('Events per second')).toBe('100');
-    const latest = screen.getByRole('region', { name: 'Latest event' });
-    expect(await within(latest).findByText('event 7')).toBeInTheDocument();
-    expect(within(latest).getByText('orders')).toBeInTheDocument();
-    expect(within(latest).getByText('info')).toBeInTheDocument();
+    // jsdom has no layout, so the grid renders no rows; its row count still covers every event.
+    expect(screen.getByRole('grid', { name: 'Events' })).toHaveAttribute('aria-rowcount', '6');
   });
 
   it('counts invalid frames without dropping the connection', async () => {

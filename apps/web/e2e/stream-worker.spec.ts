@@ -17,9 +17,7 @@ test.describe('stream worker', () => {
     await page.goto('/?rate=200&seed=42');
 
     await expect(page.getByRole('status')).toHaveText('Connected');
-    await expect(page.getByRole('region', { name: 'Latest event' })).not.toContainText(
-      'No events yet.',
-    );
+    await expect(page.getByRole('grid', { name: 'Events' }).getByRole('row').nth(1)).toBeVisible();
     expect(page.workers().length).toBeGreaterThan(0);
   });
 });

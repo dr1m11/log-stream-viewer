@@ -24,3 +24,7 @@ Carried over from the B1 review of the stream page (`apps/web/src/pages/stream`)
 - **The ring buffer has a hard capacity and evicts on append (done).** `EventStore` in `@lsv/core` evicts during the append, so a hidden tab stays bounded ([ADR-0006](./adr/0006-client-stream-pipeline.md)).
 - **Missing chunks return 404 (done).** A minimal Worker script answers a missing `/assets/…` file with 404 and `no-store`; see "Missing assets → 404" in [ADR-0003](./adr/0003-hosting.md).
 - **Rate controls clamp to `hello.limits` (done).** The stream settings in `features/configure-stream` take the slider and number-input bounds from `hello.limits` and clamp typed values to them; the effective rate comes from the server's `config`.
+
+## B6 notes
+
+- **1M rows in Firefox.** The table's content height at 1M rows (28M px) exceeds Firefox's maximum element height (about 17.9M px), so the tail is out of reach there; add offset scaling to the table before publishing 1M numbers ([ADR-0006](./adr/0006-client-stream-pipeline.md), follow-ups).
