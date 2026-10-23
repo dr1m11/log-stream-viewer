@@ -4,28 +4,28 @@ The product spec's target (§4): a steady 60 FPS while scrolling 100K rows with 
 
 ## Results (B2 baseline)
 
-Run of 2026-10-23, Chromium 156 (new headless), 144 Hz display, no CPU throttling, stream at 1,000 events/s on a full buffer:
+Measured on 2026-10-23 at commit `2991980` (stage B2 complete, event details included; the commit that adds these numbers only changes documentation). Chromium 156 (new headless), ≈144 Hz display, no CPU throttling, stream at 1,000 events/s on a full buffer:
 
 | Rows | FPS following | FPS scrolling | Frame p95 follow / scroll | Frames > 20 ms follow / scroll | Long tasks follow / scroll | Max interaction | Main heap | Worker heap |
 | ---- | ------------- | ------------- | ------------------------- | ------------------------------ | -------------------------- | --------------- | --------- | ----------- |
-| 10K  | 143           | 144           | 7.0 / 7.0 ms              | 0 / 1                          | 0 / 0                      | 40 ms           | 6 MB      | 2 MB        |
-| 100K | 144           | 144           | 7.0 / 7.0 ms              | 0 / 0                          | 0 / 0                      | 32 ms           | 19 MB     | 19 MB       |
-| 1M   | 143           | 144           | 7.1 / 7.0 ms              | 1 / 0                          | 0 / 0                      | 48 ms           | 144 MB    | 180 MB      |
+| 10K  | 144           | 143           | 7.0 / 7.0 ms              | 0 / 1                          | 0 / 0                      | 40 ms           | 7 MB      | 2 MB        |
+| 100K | 144           | 144           | 7.0 / 7.0 ms              | 0 / 0                          | 0 / 0                      | 56 ms           | 20 MB     | 19 MB       |
+| 1M   | 144           | 144           | 7.0 / 7.0 ms              | 0 / 0                          | 0 / 0                      | 56 ms           | 145 MB    | 180 MB      |
 
-A second run, same machine, with the page's main thread slowed down 4× (`PERF_CPU_THROTTLE=4`, after the fill), roughly a slower laptop:
+Two more runs of the same commit and machine with the page's main thread slowed down 4× (`PERF_CPU_THROTTLE=4`, after the fill), roughly a slower laptop; the table shows the first, the text gives the range of both:
 
 | Rows | FPS following | FPS scrolling | Frame p95 follow / scroll | Frames > 20 ms follow / scroll | Long tasks follow / scroll | Max interaction | Main heap | Worker heap |
 | ---- | ------------- | ------------- | ------------------------- | ------------------------------ | -------------------------- | --------------- | --------- | ----------- |
-| 10K  | 117           | 49            | 20.8 / 34.8 ms            | 49 / 162                       | 0 / 0                      | 192 ms          | 6 MB      | 2 MB        |
-| 100K | 120           | 57            | 14.1 / 34.7 ms            | 30 / 145                       | 0 / 1                      | 184 ms          | 19 MB     | 19 MB       |
-| 1M   | 116           | 58            | 20.8 / 27.8 ms            | 37 / 157                       | 0 / 1                      | 168 ms          | 145 MB    | 180 MB      |
+| 10K  | 113           | 40            | 20.8 / 48.7 ms            | 52 / 126                       | 1 / 12                     | 224 ms          | 7 MB      | 2 MB        |
+| 100K | 112           | 41            | 20.8 / 48.6 ms            | 67 / 130                       | 0 / 5                      | 264 ms          | 20 MB     | 19 MB       |
+| 1M   | 116           | 41            | 20.8 / 41.8 ms            | 44 / 133                       | 0 / 5                      | 232 ms          | 145 MB    | 180 MB      |
 
 What the numbers say:
 
-- **Frames.** The table renders every frame of a 144 Hz display at every size, while following the tail and while scrolling through history; the p95 frame (7.0–7.1 ms) is the display's own interval of about 6.94 ms, as timestamps rounded to 0.1 ms show it. No long task (> 50 ms) occurred in any window. Over all six windows (about 4,300 frames) two frames took just over 20 ms, at most one per window, not tied to the buffer size.
-- **Interactions.** The slowest scripted interaction took 48 ms (resume on a full 1M buffer, which jumps to the tail), well under the 200 ms that counts as a good INP. Typing a rate and pressing Enter, pausing, resuming and pressing End in the table stay within 16–48 ms.
-- **Memory.** After a forced GC, 1M rows cost 144 MB on the main thread and 180 MB in the worker, about 325 MB for the tab, below ADR-0006's estimate of 385–400 MB made in Node; the worker comes in about 65 MB under its estimate of 245 MB. At 10K most of the main heap is the app itself (about 5 MB).
-- **Headroom.** With the main thread 4× slower, following the tail still runs at about 117 FPS, but a fast sustained scroll drops to 49–58 FPS, just under the 60 FPS target, and the slowest interaction (resume) to 168–192 ms, just under 200 ms. Both are the same at 10K as at 1M rows: the cost is rendering the rows that enter the view, not the size of the buffer. That is where to optimize first when the target is a slower device.
+- **Frames.** Unthrottled, the table renders every frame of a 144 Hz display at every size, while following the tail and while scrolling through history; the p95 frame (7.0 ms) is the display's own interval of about 6.94 ms, as timestamps rounded to 0.1 ms show it. No long task (> 50 ms) occurred in any window, and one frame in all six windows (about 4,300 frames) took just over 20 ms.
+- **Interactions.** Unthrottled, the slowest scripted interaction took 56 ms (resume, which jumps back to the tail), well under the 200 ms that counts as a good INP. Typing a rate and pressing Enter stays under 16 ms; End in the table and the pause click take 24–40 ms.
+- **Memory.** After a forced GC, 1M rows cost 145 MB on the main thread and 180 MB in the worker, about 325 MB for the tab, below ADR-0006's estimate of 385–400 MB made in Node; the worker comes in about 65 MB under its estimate of 245 MB. At 10K most of the main heap is the app itself (about 6 MB).
+- **Headroom.** With the main thread 4× slower, following the tail still runs at 112–117 FPS, but a fast sustained scroll drops to 39–45 FPS with up to 12 long tasks (≤ 137 ms) in 5 s, and resume takes 224–392 ms, the other interactions 120–176 ms. The figures are the same at 10K as at 1M rows: the cost is rendering the rows that enter the view, not the size of the buffer. One throttled run before event details landed (main at `bbabeae`, same harness and machine) scrolled at 49–58 FPS with at most one long task, and resume took 168–192 ms, so the details change made the rows that enter the view more expensive to render; unthrottled, both versions keep every frame. Profiling the row render under throttling is the first optimization for slower devices.
 
 ## Method
 
@@ -46,7 +46,7 @@ The run writes a JSON report (`apps/web/perf/results/<date>.json`, git-ignored, 
 ## Known limits
 
 - **Chromium only so far.** In Firefox the tail of a full 1M buffer is out of reach: 1M rows × 28 px exceed Firefox's maximum element height of about 17.9M px (Chrome allows about 33.5M px). The fix is offset scaling in the table, planned for B6 ([ADR-0006](./adr/0006-client-stream-pipeline.md), follow-ups); 100K rows (2.8M px) work in both.
-- **Strings are held twice.** Messages and trace ids are cloned into every batch and kept by both stores, so both heaps grow with the buffer. At 1M rows the main thread's JS heap is 108 MB of its 144 MB (the typed-array columns are the rest), most of it those strings. The planned remedy, a UTF-8 string arena, waits until GC pauses or heap limits call for it ([ADR-0006](./adr/0006-client-stream-pipeline.md), follow-ups); the baseline shows no long tasks at 1M rows.
+- **Strings are held twice.** Messages and trace ids are cloned into every batch and kept by both stores, so both heaps grow with the buffer. At 1M rows the main thread's JS heap is 109 MB of its 145 MB (the typed-array columns are the rest), most of it those strings. The planned remedy, a UTF-8 string arena, waits until GC pauses or heap limits call for it ([ADR-0006](./adr/0006-client-stream-pipeline.md), follow-ups); the baseline shows no long tasks at 1M rows that 10K rows do not show as well.
 - **No main → worker backpressure.** The worker posts batches as soon as it has them. A stalled main thread catches up batch by batch (each at most 8,192 rows); the baseline never stalls on this machine, so a throttled or mobile measurement is where to look first ([ADR-0006](./adr/0006-client-stream-pipeline.md), follow-ups).
 - **Lab conditions.** One fast desktop, a local server and a deterministic stream; network jitter, a remote server and slower devices are not in these numbers. The frame collector sees main-thread frames; compositor-only effects (checkerboarding during scroll) need a trace (`/dev-stack`, step 6).
 

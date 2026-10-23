@@ -135,13 +135,13 @@ Details in [docs/roadmap.md](docs/roadmap.md).
 
 ## Performance
 
-B2 baseline in Chromium 156 on a Ryzen 7 5800H with a 144 Hz display, stream at 1,000 events/s on a full buffer (`pnpm perf`; method, a 4× CPU-throttled run and known limits in [docs/performance.md](docs/performance.md)):
+B2 baseline (commit `2991980`) in Chromium 156 on a Ryzen 7 5800H with a 144 Hz display, stream at 1,000 events/s on a full buffer (`pnpm perf`; method, 4× CPU-throttled runs and known limits in [docs/performance.md](docs/performance.md)):
 
 | Rows | FPS following / scrolling | Max interaction (INP proxy) | Main heap | Worker heap |
 | ---- | ------------------------- | --------------------------- | --------- | ----------- |
-| 10K  | 143 / 144                 | 40 ms                       | 6 MB      | 2 MB        |
-| 100K | 144 / 144                 | 32 ms                       | 19 MB     | 19 MB       |
-| 1M   | 143 / 144                 | 48 ms                       | 144 MB    | 180 MB      |
+| 10K  | 144 / 143                 | 40 ms                       | 7 MB      | 2 MB        |
+| 100K | 144 / 144                 | 56 ms                       | 20 MB     | 19 MB       |
+| 1M   | 144 / 144                 | 56 ms                       | 145 MB    | 180 MB      |
 
 The final table, across browsers, comes with stage B6.
 
