@@ -274,6 +274,26 @@ describe('LogGrid', () => {
     expect(screen.getByRole('button', { name: 'Jump to latest' })).toBeVisible();
   });
 
+  it('keeps the DOM nodes and a text selection of the rows in view while old rows are evicted', () => {
+    const { buffer, append } = createBuffer(1000);
+    append(1000);
+    const { grid, update } = renderGrid(buffer);
+    scrollTo(grid, 500 * ROW_HEIGHT);
+    const message = within(grid).getByText('event 501');
+    const row = message.closest('[role="row"]');
+    const selection = window.getSelection();
+    selection?.selectAllChildren(message);
+    expect(selection?.toString()).toBe('event 501');
+
+    append(120);
+    update();
+
+    expect(within(grid).getByText('event 501')).toBe(message);
+    expect(message.closest('[role="row"]')).toBe(row);
+    expect(message).toBeInTheDocument();
+    expect(selection?.toString()).toBe('event 501');
+  });
+
   it('stops at the oldest row when the rows in view were evicted', () => {
     const { buffer, append } = createBuffer(1000);
     append(1000);

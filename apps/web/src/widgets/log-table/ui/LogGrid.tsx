@@ -250,24 +250,39 @@ export function LogGrid({ buffer, start, end }: LogGridProps) {
 
   // The virtualizer counts the whole capacity; indexes from `count` on are not rows (yet).
   const items = virtualizer.getVirtualItems();
-  const firstIndex = items[0]?.index ?? 0;
-  const lastIndex = Math.min(items.at(-1)?.index ?? -1, count - 1);
+  let firstIndex = items[0]?.index ?? 0;
+  const span = (items.at(-1)?.index ?? -1) - firstIndex;
+  // The virtualizer's offset still belongs to the `start` of the last commit until the layout
+  // effect anchors it. Without follow, render the anchored range right away: the same positions,
+  // `start` moved by k rows, so k indexes earlier. Rendering the stale range for one commit would
+  // unmount the rows in view (and drop a text selection) before the anchoring brings them back.
+  // Reading the ref here is safe: it changes only in the layout effect, and snapshot updates
+  // render synchronously.
+
+  const laidOut = laidOutRef.current;
+  if (!following && laidOut.buffer === buffer && start > laidOut.start) {
+    firstIndex = Math.max(0, firstIndex - (start - laidOut.start));
+  }
+  const lastIndex = Math.min(firstIndex + span, count - 1);
   const rowId = (position: number): string => `${rowBaseId}row-${String(position)}`;
   // Only a row in the DOM can be the active descendant; the cursor may be scrolled out of view.
   const activeId =
     active !== undefined && active - start >= firstIndex && active - start <= lastIndex
       ? rowId(active)
       : undefined;
-  // Keyed by virtual index, not by position: while following a fast stream every row in view is a
-  // new position each frame, and recycling the row elements (only their cells re-render) costs
-  // about a fifth to a third less main-thread time at 10K events/s than mounting new ones. Where
-  // an index keeps its position (scrolling while `start` stands still) the cells' memo skips them.
+  // Row keys depend on the mode. While following, rows are keyed by virtual index: on a fast
+  // stream every row in view is a new position each frame, and recycling the row elements (only
+  // their cells re-render) costs about a fifth to a third less main-thread time at 10K events/s
+  // than mounting new ones. Otherwise rows are keyed by position: anchoring keeps the positions in
+  // view while eviction shifts their indexes, so each event keeps its DOM node, its cells skip
+  // rendering (memo) and a text selection in the view survives incoming batches. Switching modes
+  // remounts the rows in view once.
   const rows = [];
   for (let index = firstIndex; index <= lastIndex; index++) {
     const position = start + index;
     rows.push(
       <LogRow
-        key={index}
+        key={following ? `i${String(index)}` : `p${String(position)}`}
         buffer={buffer}
         position={position}
         index={index}

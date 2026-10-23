@@ -22,8 +22,8 @@ interface CellsProps {
 
 /**
  * The cells of the event at `position`. The event at a position never changes, so they re-render
- * only when their row element shows another position (rows are recycled by virtual index) or the
- * buffer changes (a new session).
+ * only when their row element shows another position (while following, rows are recycled by
+ * virtual index) or the buffer changes (a new session).
  */
 const LogCells = memo(function LogCells({ buffer, position }: CellsProps) {
   if (!buffer.has(position)) {
@@ -59,7 +59,7 @@ const LogCells = memo(function LogCells({ buffer, position }: CellsProps) {
 
 export interface LogRowProps {
   readonly buffer: LogBufferView;
-  /** Buffer position of the event. The React key is the virtual index: row elements are reused. */
+  /** Buffer position of the event (the grid picks the React key: index or position, by mode). */
   readonly position: number;
   /** Virtual index (`position - start`), read by the virtualizer from `data-index`. */
   readonly index: number;
