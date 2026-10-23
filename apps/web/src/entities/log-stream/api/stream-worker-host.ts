@@ -13,13 +13,27 @@ import {
   type StreamSocketHandlers,
 } from '@/shared/api';
 
+import { formatPayload } from '../lib/format-payload';
 import type {
   FromWorkerMessage,
+  LogEventDetails,
   MessageEndpoint,
   ToWorkerMessage,
   WorkerConfigureMessage,
+  WorkerGetEventMessage,
   WorkerStartMessage,
 } from './worker-protocol';
+
+/**
+ * The details of the event at `position`, or `undefined` once it is evicted. `eventAt` builds one
+ * object per request; the details view asks for one event at a time.
+ */
+function eventDetails(store: EventStore, position: number): LogEventDetails | undefined {
+  const event = store.eventAt(position);
+  if (event === undefined) return undefined;
+  const { payload, ...fields } = event;
+  return { event: fields, payload: payload === undefined ? undefined : formatPayload(payload) };
+}
 
 /** `stream-error` code when a `configure` arrives while the session has no open connection. */
 export const NOT_CONNECTED_ERROR_CODE = 'not-connected';
@@ -43,7 +57,8 @@ export interface StreamWorkerHost {
 /**
  * The stream worker's logic (docs/adr/0006), kept apart from the thin `stream.worker.ts` entry so
  * tests can drive it with a fake port and a fake `WebSocket`. It owns the socket, the parsing (in
- * `openStreamSocket`), the stream statistics and the authoritative `EventStore` with payloads.
+ * `openStreamSocket`), the stream statistics and the authoritative `EventStore` with payloads, from
+ * which it answers `get-event` for the details view.
  *
  * Per server batch it appends the events, then posts every row appended since the previous post
  * as column batches of at most `MAX_COLUMN_BATCH_ROWS` rows with their typed arrays transferred —
@@ -153,6 +168,12 @@ export function createStreamWorkerHost(
     });
   }
 
+  function getEvent({ session: target, requestId, position }: WorkerGetEventMessage): void {
+    // The main thread settled the requests of an older session when it started this one.
+    if (target !== session) return;
+    post({ type: 'event', session, requestId, details: eventDetails(store, position) });
+  }
+
   port.onmessage = ({ data }) => {
     switch (data.type) {
       case 'start':
@@ -163,6 +184,9 @@ export function createStreamWorkerHost(
         return;
       case 'configure':
         configure(data);
+        return;
+      case 'get-event':
+        getEvent(data);
         return;
       default:
         // A message type added to `ToWorkerMessage` without a case here fails to compile.

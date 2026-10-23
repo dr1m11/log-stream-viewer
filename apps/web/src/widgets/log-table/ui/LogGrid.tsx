@@ -12,6 +12,7 @@ import {
   useCallback,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type WheelEvent,
@@ -23,13 +24,26 @@ import { Button } from '@/shared/ui/button';
 
 import {
   anchorScrollTop,
+  type ExpandedRow,
+  firstRenderedIndex,
+  firstRowInView,
   followAfterUserScroll,
   HEADER_HEIGHT,
   nextActivePosition,
   ROW_HEIGHT,
+  rowsHeight,
+  rowTop,
   scrollTopToReveal,
 } from '../lib/table-scroll';
-import { COLUMN_COUNT, LogRow, ROW_COLUMNS } from './LogRow';
+import type { GetEventDetails } from './EventDetails';
+import {
+  COLUMN_COUNT,
+  DETAILS_ROW_SELECTOR,
+  DETAILS_TOGGLE_SELECTOR,
+  DetailsRow,
+  LogRow,
+  ROW_COLUMNS,
+} from './LogRow';
 
 /** Rows rendered beyond each edge of the viewport, so a fast scroll does not show blank rows. */
 const OVERSCAN = 10;
@@ -39,6 +53,25 @@ type RectListener = Parameters<typeof observeElementRect>[1];
 
 function estimateRowSize(): number {
   return ROW_HEIGHT;
+}
+
+/** What the rows were laid out for in a commit. */
+interface Layout {
+  readonly buffer: LogBufferView;
+  readonly start: number;
+  /** The open row, in the indexes of this layout's `start`; `undefined` if none is retained. */
+  readonly expanded: ExpandedRow | undefined;
+}
+
+/** The open row at `position` as an {@link ExpandedRow}, if it is among the rows `[start, end)`. */
+function expandedRowAt(
+  position: number | undefined,
+  start: number,
+  end: number,
+  extra: number,
+): ExpandedRow | undefined {
+  if (position === undefined || position < start || position >= end) return undefined;
+  return { index: position - start, extra };
 }
 
 export interface LogGridProps {
@@ -54,6 +87,8 @@ export interface LogGridProps {
    * false again the grid jumps to the newest row and follows.
    */
   readonly paused?: boolean;
+  /** Fetches the details of an expanded row's event (`LogStreamStore.getEventDetails`). */
+  readonly getEventDetails: GetEventDetails;
 }
 
 /**
@@ -78,14 +113,28 @@ export interface LogGridProps {
  * renders only the indexes below `end - start`, with its own content height. TanStack Virtual
  * rebuilds its measurements in O(count) whenever the count changes (11 ms per batch near 1M rows);
  * with a fixed count that happens once per buffer.
+ *
+ * **Details.** Enter on the active row, or its disclosure button, opens the row's details (one
+ * row at a time); Escape or the same again closes them. Opening stops following, so the row does
+ * not scroll away; closing does not resume it. The open row is kept by position, and only its
+ * details are measured, by a `ResizeObserver` of the grid's own: the virtualizer's
+ * `measureElement` would key the size by virtual index, which moves with every eviction, and
+ * each new size would rebuild its measurements in O(count). The grid adds the measured height to
+ * its content height, to the offset of the rows below the open row and to the anchoring. The
+ * table is a `treegrid`, the grid role whose rows ARIA lets carry `aria-expanded`, so a screen
+ * reader announces the state of the active row.
  */
-export function LogGrid({ buffer, start, end, paused = false }: LogGridProps) {
+export function LogGrid({ buffer, start, end, paused = false, getEventDetails }: LogGridProps) {
   const headingId = useId();
   const rowBaseId = useId();
   const scrollRef = useRef<HTMLDivElement>(null);
   const [following, setFollowing] = useState(!paused);
   /** Position of the keyboard cursor; may fall out of `[start, end)` through eviction. */
   const [active, setActive] = useState<number | undefined>(undefined);
+  /** Position of the row whose details are open; may fall out of `[start, end)` through eviction. */
+  const [expanded, setExpanded] = useState<number | undefined>(undefined);
+  /** Measured height of the open details in pixels; 0 until measured. */
+  const [detailsHeight, setDetailsHeight] = useState(0);
 
   // A new buffer is a new session whose positions restart at 0: start over at the tail.
   const [shownBuffer, setShownBuffer] = useState(buffer);
@@ -93,6 +142,7 @@ export function LogGrid({ buffer, start, end, paused = false }: LogGridProps) {
     setShownBuffer(buffer);
     setFollowing(true);
     setActive(undefined);
+    setExpanded(undefined);
   }
 
   // Pausing holds the rows in view where they are; resuming returns to the tail.
@@ -112,13 +162,19 @@ export function LogGrid({ buffer, start, end, paused = false }: LogGridProps) {
   const ownScrollTopRef = useRef<number | undefined>(undefined);
   /** The offset seen by the last scroll event or write, to tell the direction of a scroll. */
   const lastScrollTopRef = useRef(0);
-  /** What the rows were laid out for in the last commit, to measure eviction. */
-  const laidOutRef = useRef({ buffer, start });
+  const count = end - start;
+  const expandedRow = useMemo(
+    () => expandedRowAt(expanded, start, end, detailsHeight),
+    [expanded, start, end, detailsHeight],
+  );
+
+  /** What the rows were laid out for in the last commit, to measure eviction and open details. */
+  const laidOutRef = useRef<Layout>({ buffer, start, expanded: expandedRow });
   /** Height of the scroll viewport (header included), from the virtualizer's resize observer. */
   const viewportHeightRef = useRef(0);
-  /** `tracking` and the row count of the last commit, for the resize observer. */
+  /** `tracking` and the height of the rows in the last commit, for the resize observer. */
   const followingRef = useRef(tracking);
-  const countRef = useRef(end - start);
+  const rowsHeightRef = useRef(rowsHeight(count, ROW_HEIGHT, expandedRow));
 
   const observeOffset = useCallback(
     (instance: Virtualizer<HTMLDivElement, Element>, listener: OffsetListener) => {
@@ -147,7 +203,7 @@ export function LogGrid({ buffer, start, end, paused = false }: LogGridProps) {
 
   const pinToBottom = useCallback(
     (element: HTMLElement) => {
-      const contentHeight = HEADER_HEIGHT + countRef.current * ROW_HEIGHT;
+      const contentHeight = HEADER_HEIGHT + rowsHeightRef.current;
       writeScrollTop(element, Math.max(0, contentHeight - viewportHeightRef.current));
     },
     [writeScrollTop],
@@ -169,7 +225,34 @@ export function LogGrid({ buffer, start, end, paused = false }: LogGridProps) {
     [pinToBottom],
   );
 
-  const count = end - start;
+  /**
+   * Measures the open details row: once when it mounts, then whenever it resizes (the payload
+   * arrives, a new width rewraps the text). A `ResizeObserver` callback runs after layout, so
+   * reading the height there forces nothing. The first read is synchronous, in the commit that
+   * opens the row: the observer's first notification would set the height only in a later task,
+   * after a frame painted with the wrong content height and offsets; the read costs one layout
+   * per opened row, which the browser would run before that paint anyway.
+   *
+   * When the row leaves the DOM (closed, scrolled out of the rendered window, evicted) while the
+   * focus is inside it, the focus goes back to the grid instead of dropping to `<body>`.
+   */
+  const measureDetails = useCallback((element: HTMLDivElement | null) => {
+    if (element === null) return;
+    const measure = (): void => {
+      setDetailsHeight(element.offsetHeight);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => {
+      // Runs before the element is removed, while it still holds the focus.
+      if (element.contains(document.activeElement)) {
+        scrollRef.current?.focus({ preventScroll: true });
+      }
+      observer.disconnect();
+    };
+  }, []);
+
   // eslint-disable-next-line react-hooks/incompatible-library -- no React Compiler in this build; the grid re-renders on every range change anyway
   const virtualizer = useVirtualizer({
     count: buffer.capacity,
@@ -186,19 +269,25 @@ export function LogGrid({ buffer, start, end, paused = false }: LogGridProps) {
   useLayoutEffect(() => {
     const element = scrollRef.current;
     const previous = laidOutRef.current;
-    laidOutRef.current = { buffer, start };
+    laidOutRef.current = { buffer, start, expanded: expandedRow };
     followingRef.current = tracking;
-    countRef.current = end - start;
+    rowsHeightRef.current = rowsHeight(end - start, ROW_HEIGHT, expandedRow);
     if (element === null) return;
     if (tracking) {
       pinToBottom(element);
-    } else if (previous.buffer === buffer && start > previous.start) {
+    } else if (previous.buffer === buffer) {
       writeScrollTop(
         element,
-        anchorScrollTop(lastScrollTopRef.current, start - previous.start, ROW_HEIGHT),
+        anchorScrollTop(
+          lastScrollTopRef.current,
+          start - previous.start,
+          ROW_HEIGHT,
+          previous.expanded,
+          expandedRow,
+        ),
       );
     }
-  }, [buffer, start, end, tracking, pinToBottom, writeScrollTop]);
+  }, [buffer, start, end, tracking, expandedRow, pinToBottom, writeScrollTop]);
 
   function handleScroll(event: UIEvent<HTMLDivElement>): void {
     const element = event.currentTarget;
@@ -223,9 +312,44 @@ export function LogGrid({ buffer, start, end, paused = false }: LogGridProps) {
     if (up && !event.ctrlKey && following) setFollowing(false);
   }
 
+  /** Opens the details of the row at `position` (closing any other) or closes them. */
+  function toggleDetails(position: number): void {
+    setActive(position);
+    if (expanded === position) {
+      setExpanded(undefined);
+      return;
+    }
+    setExpanded(position);
+    setDetailsHeight(0);
+    // The open row must not scroll away under the incoming rows.
+    setFollowing(false);
+  }
+
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     const element = event.currentTarget;
+    if (event.target !== element) {
+      // Keys inside the open details (scrolling them) are theirs. Escape closes the details and
+      // brings the focus back to the grid before the focused region unmounts.
+      if (event.key === 'Escape' && expanded !== undefined) {
+        event.preventDefault();
+        element.focus({ preventScroll: true });
+        setExpanded(undefined);
+      }
+      return;
+    }
+    if (event.key === 'Enter') {
+      if (active === undefined || active < start || active >= end) return;
+      event.preventDefault();
+      toggleDetails(active);
+      return;
+    }
+    if (event.key === 'Escape') {
+      if (expanded === undefined) return;
+      event.preventDefault();
+      setExpanded(undefined);
+      return;
+    }
     const viewport = Math.max(ROW_HEIGHT, element.clientHeight - HEADER_HEIGHT);
     const next = nextActivePosition(event.key, {
       active,
@@ -233,7 +357,7 @@ export function LogGrid({ buffer, start, end, paused = false }: LogGridProps) {
       end,
       pageRows: Math.max(1, Math.floor(viewport / ROW_HEIGHT) - 1),
       following: tracking,
-      firstVisible: start + Math.ceil(element.scrollTop / ROW_HEIGHT),
+      firstVisible: start + firstRowInView(element.scrollTop, ROW_HEIGHT, expandedRow),
     });
     if (next === undefined) return;
     event.preventDefault();
@@ -244,16 +368,25 @@ export function LogGrid({ buffer, start, end, paused = false }: LogGridProps) {
     if (!follow) {
       writeScrollTop(
         element,
-        scrollTopToReveal(next - start, element.scrollTop, viewport, ROW_HEIGHT),
+        scrollTopToReveal(next - start, element.scrollTop, viewport, ROW_HEIGHT, expandedRow),
       );
     }
   }
 
   function handleClick(event: MouseEvent<HTMLDivElement>): void {
-    const row = event.target instanceof Element ? event.target.closest('[data-index]') : null;
+    const { target } = event;
+    // Clicks inside the open details (selecting text) leave the cursor and follow mode alone.
+    if (!(target instanceof Element) || target.closest(DETAILS_ROW_SELECTOR) !== null) return;
+    const row = target.closest('[data-index]');
     const index = Number(row?.getAttribute('data-index'));
     if (!Number.isInteger(index)) return;
     const position = start + index;
+    if (target.closest(DETAILS_TOGGLE_SELECTOR) !== null) {
+      toggleDetails(position);
+      // The button does not take the focus (see `LogRow`): give it to the grid, as a row click does.
+      event.currentTarget.focus({ preventScroll: true });
+      return;
+    }
     setActive(position);
     // Like the keyboard: a row other than the newest holds the view, so it does not scroll away.
     setFollowing(position === end - 1);
@@ -276,11 +409,24 @@ export function LogGrid({ buffer, start, end, paused = false }: LogGridProps) {
   // Reading the ref here is safe: it changes only in the layout effect, and snapshot updates
   // render synchronously.
 
+  // The same goes for open details evicted, closed or resized above the view: render the rows
+  // where the anchoring will put the offset.
   const laidOut = laidOutRef.current;
-  if (!tracking && laidOut.buffer === buffer && start > laidOut.start) {
-    firstIndex = Math.max(0, firstIndex - (start - laidOut.start));
+  if (!tracking && laidOut.buffer === buffer) {
+    const from = lastScrollTopRef.current;
+    const to = anchorScrollTop(
+      from,
+      start - laidOut.start,
+      ROW_HEIGHT,
+      laidOut.expanded,
+      expandedRow,
+    );
+    // Rounded down, so that a partly visible row is rendered rather than missed.
+    firstIndex = Math.max(0, firstIndex + Math.floor((to - from) / ROW_HEIGHT));
   }
   const lastIndex = Math.min(firstIndex + span, count - 1);
+  // Rows below open details sit lower than the virtualizer places them.
+  firstIndex = firstRenderedIndex(firstIndex, OVERSCAN, ROW_HEIGHT, expandedRow);
   const rowId = (position: number): string => `${rowBaseId}row-${String(position)}`;
   // Only a row in the DOM can be the active descendant; the cursor may be scrolled out of view.
   const activeId =
@@ -293,20 +439,41 @@ export function LogGrid({ buffer, start, end, paused = false }: LogGridProps) {
   // than mounting new ones. Otherwise rows are keyed by position: anchoring keeps the positions in
   // view while eviction shifts their indexes, so each event keeps its DOM node, its cells skip
   // rendering (memo) and a text selection in the view survives incoming batches. Switching modes
-  // remounts the rows in view once.
+  // remounts the rows in view once. The open row and its details row are keyed by position in
+  // every mode, so eviction moving their index never remounts the details (or fetches again).
+  //
+  // The details row follows its row as a row of its own (level 2 of the treegrid), so it counts in
+  // `aria-rowcount`, and the rows after it have their `aria-rowindex` one higher.
   const rows = [];
   for (let index = firstIndex; index <= lastIndex; index++) {
     const position = start + index;
+    const afterDetails = expandedRow !== undefined && index > expandedRow.index;
     rows.push(
       <LogRow
-        key={tracking ? `i${String(index)}` : `p${String(position)}`}
+        key={tracking && position !== expanded ? `i${String(index)}` : `p${String(position)}`}
         buffer={buffer}
         position={position}
         index={index}
+        // The header is row 1.
+        rowIndex={index + (afterDetails ? 3 : 2)}
         id={rowId(position)}
         active={position === active}
+        expanded={position === expanded}
       />,
     );
+    if (position === expanded) {
+      rows.push(
+        <DetailsRow
+          key={`d${String(position)}`}
+          buffer={buffer}
+          position={position}
+          rowIndex={index + 3}
+          rowId={rowId(position)}
+          getEventDetails={getEventDetails}
+          measureRef={measureDetails}
+        />,
+      );
+    }
   }
 
   return (
@@ -322,12 +489,12 @@ export function LogGrid({ buffer, start, end, paused = false }: LogGridProps) {
         header: the rounded panel clips an outline outside the grid, and the header covers the
         top edge of one drawn on the grid itself.
       */}
-      <div className="relative min-h-0 flex-1 after:pointer-events-none after:absolute after:inset-0 after:z-20 after:rounded-b-md has-[[role=grid]:focus-visible]:after:outline-2 has-[[role=grid]:focus-visible]:after:-outline-offset-2 has-[[role=grid]:focus-visible]:after:outline-focus">
+      <div className="relative min-h-0 flex-1 after:pointer-events-none after:absolute after:inset-0 after:z-20 after:rounded-b-md has-[[role=treegrid]:focus-visible]:after:outline-2 has-[[role=treegrid]:focus-visible]:after:-outline-offset-2 has-[[role=treegrid]:focus-visible]:after:outline-focus">
         <div
           ref={scrollRef}
-          role="grid"
+          role="treegrid"
           aria-labelledby={headingId}
-          aria-rowcount={count + 1}
+          aria-rowcount={count + (expandedRow === undefined ? 1 : 2)}
           aria-colcount={COLUMN_COUNT}
           aria-activedescendant={activeId}
           tabIndex={0}
@@ -352,16 +519,21 @@ export function LogGrid({ buffer, start, end, paused = false }: LogGridProps) {
                   'border-b border-border text-fg-muted *:font-sans *:text-xs *:font-semibold',
                 )}
               >
+                <div role="columnheader">
+                  <span className="sr-only">Details</span>
+                </div>
                 <div role="columnheader">Time</div>
                 <div role="columnheader">Level</div>
                 <div role="columnheader">Service</div>
                 <div role="columnheader">Message</div>
               </div>
             </div>
-            <div style={{ height: count * ROW_HEIGHT }}>
+            <div style={{ height: rowsHeight(count, ROW_HEIGHT, expandedRow) }}>
               <div
                 role="rowgroup"
-                style={{ transform: `translateY(${String(firstIndex * ROW_HEIGHT)}px)` }}
+                style={{
+                  transform: `translateY(${String(rowTop(firstIndex, ROW_HEIGHT, expandedRow))}px)`,
+                }}
               >
                 {rows}
               </div>

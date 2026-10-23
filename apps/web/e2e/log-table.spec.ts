@@ -38,7 +38,7 @@ test.describe('log table', () => {
     expectNoA11yViolations,
   }) => {
     await page.goto('/?rate=1000&seed=42');
-    const grid = page.getByRole('grid', { name: 'Events' });
+    const grid = page.getByRole('treegrid', { name: 'Events' });
     const jump = page.getByRole('button', { name: 'Jump to latest' });
     await expect(page.getByRole('status')).toHaveText('Connected');
 
@@ -77,7 +77,7 @@ test.describe('log table', () => {
     page,
   }) => {
     await page.goto('/?rate=1000&seed=42&buffer=5000');
-    const grid = page.getByRole('grid', { name: 'Events' });
+    const grid = page.getByRole('treegrid', { name: 'Events' });
     // Five seconds of events fill the buffer.
     await expect.poll(() => rowCount(grid), { timeout: 15_000 }).toBe(5000);
 
@@ -98,7 +98,7 @@ test.describe('log table', () => {
 
   test('moves through the rows with the keyboard', async ({ page, expectNoA11yViolations }) => {
     await page.goto('/?rate=200&seed=42');
-    const grid = page.getByRole('grid', { name: 'Events' });
+    const grid = page.getByRole('treegrid', { name: 'Events' });
     const jump = page.getByRole('button', { name: 'Jump to latest' });
     await expect.poll(() => rowCount(grid)).toBeGreaterThan(100);
 

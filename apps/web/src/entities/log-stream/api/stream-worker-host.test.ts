@@ -14,6 +14,7 @@ import {
   testLogEvent,
 } from '@/shared/lib/testing';
 
+import { MAX_PAYLOAD_TEXT_LENGTH } from '../lib/format-payload';
 import { createStreamWorkerHost, NOT_CONNECTED_ERROR_CODE } from './stream-worker-host';
 import type { FromWorkerMessage, ToWorkerMessage, WorkerBatchMessage } from './worker-protocol';
 
@@ -348,6 +349,86 @@ describe('createStreamWorkerHost', () => {
     port.receive({ type: 'configure', session: 2, requestId: 'cfg-1', rate: 500 });
 
     expect(socket.sent).toEqual([]);
+    expect(port.posted).toHaveLength(posted);
+  });
+
+  it('answers get-event with the event at the position and its payload pretty-printed', () => {
+    const { port, start } = setup();
+    const socket = start(2);
+    connect(socket);
+    const payload = { orderId: 'o-17', items: [{ sku: 'a', qty: 2 }] };
+    const fields = testLogEvent(2, { traceId: 'trace-2' });
+    socket.receive(
+      JSON.stringify({ ...testBatch([]), events: [testLogEvent(1), { ...fields, payload }] }),
+    );
+
+    port.receive({ type: 'get-event', session: 2, requestId: 7, position: 1 });
+    port.receive({ type: 'get-event', session: 2, requestId: 8, position: 0 });
+
+    const text = JSON.stringify(payload, null, 2);
+    expect(port.messages().slice(-2)).toEqual([
+      {
+        type: 'event',
+        session: 2,
+        requestId: 7,
+        details: { event: fields, payload: { text, truncated: false, length: text.length } },
+      },
+      {
+        type: 'event',
+        session: 2,
+        requestId: 8,
+        details: { event: testLogEvent(1), payload: undefined },
+      },
+    ]);
+  });
+
+  it('cuts a large payload in the worker instead of sending all of it', () => {
+    const { port, start } = setup();
+    const socket = start(1);
+    connect(socket);
+    const payload = { blob: 'x'.repeat(200_000) };
+    socket.receive(JSON.stringify({ ...testBatch([]), events: [testLogEvent(1, { payload })] }));
+
+    port.receive({ type: 'get-event', session: 1, requestId: 1, position: 0 });
+
+    const answer = port.messages().at(-1);
+    if (answer?.type !== 'event') throw new Error('No event answer');
+    expect(answer.details?.payload).toMatchObject({
+      truncated: true,
+      length: JSON.stringify(payload, null, 2).length,
+    });
+    expect(answer.details?.payload?.text).toHaveLength(MAX_PAYLOAD_TEXT_LENGTH);
+  });
+
+  it('answers get-event with undefined once the position has been evicted', () => {
+    const { port, start } = setup();
+    const socket = start(1, 1000);
+    connect(socket);
+    socket.receive(frame(seqs(1, 1200)));
+
+    port.receive({ type: 'get-event', session: 1, requestId: 1, position: 199 });
+    port.receive({ type: 'get-event', session: 1, requestId: 2, position: 200 });
+
+    expect(port.messages().slice(-2)).toEqual([
+      { type: 'event', session: 1, requestId: 1, details: undefined },
+      {
+        type: 'event',
+        session: 1,
+        requestId: 2,
+        details: { event: testLogEvent(201), payload: undefined },
+      },
+    ]);
+  });
+
+  it('ignores a get-event for an older session', () => {
+    const { port, start } = setup();
+    const socket = start(3);
+    connect(socket);
+    socket.receive(frame([1, 2, 3]));
+    const posted = port.posted.length;
+
+    port.receive({ type: 'get-event', session: 2, requestId: 1, position: 0 });
+
     expect(port.posted).toHaveLength(posted);
   });
 

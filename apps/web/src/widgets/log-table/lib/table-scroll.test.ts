@@ -3,11 +3,33 @@ import { describe, expect, it } from 'vitest';
 import {
   anchorScrollTop,
   BOTTOM_THRESHOLD,
+  type ExpandedRow,
+  firstRenderedIndex,
+  firstRowInView,
   followAfterUserScroll,
   type GridCursor,
   nextActivePosition,
+  rowsHeight,
+  rowTop,
   scrollTopToReveal,
 } from './table-scroll';
+
+/** Row 40 is open, with details 200 px tall. */
+const OPEN: ExpandedRow = { index: 40, extra: 200 };
+
+describe('rowTop and rowsHeight', () => {
+  it('places rows below an open row lower by the height of its details', () => {
+    expect(rowTop(40, 28, OPEN)).toBe(40 * 28);
+    expect(rowTop(41, 28, OPEN)).toBe(41 * 28 + 200);
+    expect(rowTop(41, 28)).toBe(41 * 28);
+  });
+
+  it('adds the details to the height of the rows only while their row is among them', () => {
+    expect(rowsHeight(100, 28, OPEN)).toBe(100 * 28 + 200);
+    expect(rowsHeight(40, 28, OPEN)).toBe(40 * 28);
+    expect(rowsHeight(100, 28)).toBe(100 * 28);
+  });
+});
 
 describe('anchorScrollTop', () => {
   it('moves the offset up by the height of the evicted rows', () => {
@@ -20,6 +42,83 @@ describe('anchorScrollTop', () => {
 
   it('stops at the top when the rows in view were evicted themselves', () => {
     expect(anchorScrollTop(280, 50, 28)).toBe(0);
+  });
+
+  it('keeps the offset for open details that stay above the view while rows are evicted', () => {
+    // Row 40 (now 30) and its details end at 41 × 28 + 200 = 1348, above the view at 5000.
+    expect(anchorScrollTop(5000, 10, 28, OPEN, { index: 30, extra: 200 })).toBe(5000 - 10 * 28);
+  });
+
+  it('takes the height of open details above the view out when their row is evicted', () => {
+    expect(anchorScrollTop(5000, 50, 28, OPEN, undefined)).toBe(5000 - 50 * 28 - 200);
+  });
+
+  it('takes the height of open details above the view out when they are closed', () => {
+    expect(anchorScrollTop(5000, 0, 28, OPEN, undefined)).toBe(5000 - 200);
+  });
+
+  it('follows a change of height of open details above the view', () => {
+    expect(anchorScrollTop(5000, 0, 28, OPEN, { index: 40, extra: 320 })).toBe(5000 + 120);
+  });
+
+  it('adds the height of details opened above the view', () => {
+    expect(anchorScrollTop(5000, 0, 28, undefined, OPEN)).toBe(5000 + 200);
+  });
+
+  it('leaves the offset alone for open details in or below the view', () => {
+    // The view starts on row 40's own line: its details are in view.
+    expect(anchorScrollTop(40 * 28, 0, 28, undefined, OPEN)).toBe(40 * 28);
+    expect(anchorScrollTop(40 * 28 + 10, 0, 28, OPEN, OPEN)).toBe(40 * 28 + 10);
+    expect(anchorScrollTop(280, 5, 28, OPEN, { index: 35, extra: 200 })).toBe(280 - 5 * 28);
+  });
+
+  describe('with the top of the view inside the open details', () => {
+    // Row 10's line ends at 308; its details span 308..508; the view starts 92 px into them.
+    const ROW_10: ExpandedRow = { index: 10, extra: 200 };
+
+    it('keeps the offset while nothing changes, also from exactly where the details start', () => {
+      expect(anchorScrollTop(400, 0, 28, ROW_10, ROW_10)).toBe(400);
+      expect(anchorScrollTop(308, 0, 28, ROW_10, ROW_10)).toBe(308);
+    });
+
+    it('keeps the distance into the details when they grow, and stops at their end when they shrink', () => {
+      expect(anchorScrollTop(400, 0, 28, ROW_10, { index: 10, extra: 320 })).toBe(400);
+      expect(anchorScrollTop(400, 0, 28, ROW_10, { index: 10, extra: 50 })).toBe(308 + 50);
+    });
+
+    it('moves with rows evicted above the open row', () => {
+      expect(anchorScrollTop(400, 3, 28, ROW_10, { index: 7, extra: 200 })).toBe(400 - 3 * 28);
+    });
+
+    it('lands just below the row line when the details close or their row is evicted', () => {
+      expect(anchorScrollTop(400, 0, 28, ROW_10, undefined)).toBe(308);
+      expect(anchorScrollTop(400, 4, 28, { index: 10, extra: 200 }, undefined)).toBe(308 - 4 * 28);
+      expect(anchorScrollTop(400, 11, 28, ROW_10, undefined)).toBe(0);
+    });
+  });
+});
+
+describe('firstRenderedIndex', () => {
+  it("starts the virtualizer's window earlier when an open row is above it", () => {
+    // 200 px of details are up to ceil(200 / 28) = 8 rows.
+    expect(firstRenderedIndex(100, 10, 28, OPEN)).toBe(92);
+    expect(firstRenderedIndex(5, 10, 28, { index: 2, extra: 200 })).toBe(0);
+  });
+
+  it("keeps the virtualizer's window when no open row is above the view", () => {
+    expect(firstRenderedIndex(100, 10, 28)).toBe(100);
+    expect(firstRenderedIndex(30, 10, 28, OPEN)).toBe(30);
+  });
+});
+
+describe('firstRowInView', () => {
+  it('counts the rows above the view, with open details above it', () => {
+    expect(firstRowInView(280, 28)).toBe(10);
+    expect(firstRowInView(290, 28)).toBe(11);
+    expect(firstRowInView(280, 28, OPEN)).toBe(10);
+    // Inside the details of row 40, the next row is the first whose top is in view.
+    expect(firstRowInView(41 * 28 + 50, 28, OPEN)).toBe(41);
+    expect(firstRowInView(60 * 28 + 200, 28, OPEN)).toBe(60);
   });
 });
 
@@ -41,6 +140,11 @@ describe('scrollTopToReveal', () => {
 
   it('reveals a partly hidden row at the bottom edge', () => {
     expect(scrollTopToReveal(19, 270, viewport, 28)).toBe(20 * 28 - viewport);
+  });
+
+  it('accounts for open details above the row', () => {
+    expect(scrollTopToReveal(60, 0, viewport, 28, OPEN)).toBe(61 * 28 + 200 - viewport);
+    expect(scrollTopToReveal(41, 5000, viewport, 28, OPEN)).toBe(41 * 28 + 200);
   });
 });
 

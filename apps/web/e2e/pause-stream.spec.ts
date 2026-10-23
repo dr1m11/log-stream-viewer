@@ -62,7 +62,7 @@ test.describe('pause stream', () => {
     expectNoA11yViolations,
   }) => {
     await page.goto('/?rate=1000&seed=42');
-    const grid = page.getByRole('grid', { name: 'Events' });
+    const grid = page.getByRole('treegrid', { name: 'Events' });
     const pause = page.getByRole('button', { name: 'Pause stream' });
     const newEvents = page.getByText(/^[\d,]+ new events?$/);
     await expect(page.getByRole('status')).toHaveText('Connected');
@@ -108,7 +108,7 @@ test.describe('pause stream', () => {
     expectNoA11yViolations,
   }) => {
     await page.goto('/?rate=1000&seed=42&buffer=1000');
-    const grid = page.getByRole('grid', { name: 'Events' });
+    const grid = page.getByRole('treegrid', { name: 'Events' });
     const pause = page.getByRole('button', { name: 'Pause stream' });
     const warning = page.getByText(
       /^[\d,]+ older events evicted while paused — the buffer is full$/,

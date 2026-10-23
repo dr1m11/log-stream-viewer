@@ -1,5 +1,6 @@
-// Test-facing: lets a test that stubs the global `Worker` answer as the stream worker would.
-export type { FromWorkerMessage } from './api/worker-protocol';
+// `FromWorkerMessage` is test-facing: a test that stubs the global `Worker` answers with it.
+export type { FromWorkerMessage, LogEventDetails } from './api/worker-protocol';
+export type { PayloadText } from './lib/format-payload';
 export type {
   ConnectionStatus,
   LogBufferView,

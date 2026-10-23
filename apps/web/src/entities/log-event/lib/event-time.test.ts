@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatEventTime } from './event-time';
+import { formatEventDateTime, formatEventTime } from './event-time';
 
 function pad(value: number, length = 2): string {
   return String(value).padStart(length, '0');
@@ -13,6 +13,17 @@ describe('formatEventTime', () => {
 
     expect(formatEventTime(ts)).toBe(
       `${pad(local.getHours())}:${pad(local.getMinutes())}:${pad(local.getSeconds())}.${pad(local.getMilliseconds(), 3)}`,
+    );
+  });
+});
+
+describe('formatEventDateTime', () => {
+  it('puts the local date before the time of day', () => {
+    const ts = Date.UTC(2026, 0, 2, 21, 4, 5, 7);
+    const local = new Date(ts);
+
+    expect(formatEventDateTime(ts)).toBe(
+      `${String(local.getFullYear())}-${pad(local.getMonth() + 1)}-${pad(local.getDate())} ${formatEventTime(ts)}`,
     );
   });
 });

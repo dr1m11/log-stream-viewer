@@ -18,6 +18,7 @@ Available now:
 - A versioned wire protocol (JSON batches over WebSocket) shared by server and client as one package, with golden fixtures and a compatibility policy
 - The web app connects on open and shows the connection status, events received and per second, missed and dropped events, and a virtualized table of the received events that follows the newest one (keyboard navigable, "Jump to latest" after scrolling up); stream settings come from the URL (`/?rate=500&scenario=error-burst&seed=42`)
 - Pause and resume the table (button or <kbd>P</kbd>): the view holds still while events keep arriving in the buffer, a badge counts the new ones, resume shows all of them and follows the tail again, and a warning says when the full buffer starts evicting events of the paused view
+- Open any row (Enter, or its disclosure button) to see the whole event: the full message, host, trace ID and the pretty-printed JSON payload, fetched on demand from the stream worker, which keeps the payloads off the main thread
 - Server limits that keep a public demo cheap: an Origin allowlist, connection caps per IP and in total, a global event budget, 30-minute sessions, and a machine that suspends when idle
 - Light and dark themes without a flash, a strict Content Security Policy, and a preview deployment for every pull request from a branch of this repository
 

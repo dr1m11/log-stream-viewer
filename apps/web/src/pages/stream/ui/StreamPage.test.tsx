@@ -216,7 +216,7 @@ describe('StreamPage', () => {
     expect(counter('Invalid frames')).toBe('0');
     expect(counter('Events per second')).toBe('100');
     // jsdom has no layout, so the grid renders no rows; its row count still covers every event.
-    expect(screen.getByRole('grid', { name: 'Events' })).toHaveAttribute('aria-rowcount', '6');
+    expect(screen.getByRole('treegrid', { name: 'Events' })).toHaveAttribute('aria-rowcount', '6');
   });
 
   it('counts invalid frames without dropping the connection', async () => {
@@ -252,7 +252,7 @@ describe('StreamPage', () => {
     const user = userEvent.setup();
     const { worker } = await renderConnected();
     const encode = createSource();
-    const grid = screen.getByRole('grid', { name: 'Events' });
+    const grid = screen.getByRole('treegrid', { name: 'Events' });
     post(worker, {
       type: 'batch',
       session: 0,

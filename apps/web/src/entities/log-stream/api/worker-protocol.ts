@@ -1,7 +1,9 @@
 import type { ColumnBatch, StreamCounters } from '@lsv/core';
-import type { ConfigMessage, ErrorMessage, HelloMessage } from '@lsv/protocol';
+import type { ConfigMessage, ErrorMessage, HelloMessage, LogEvent } from '@lsv/protocol';
 
 import type { StreamConfigureRequest, StreamRequest } from '@/shared/api';
+
+import type { PayloadText } from '../lib/format-payload';
 
 /**
  * Messages between the main thread and the stream worker (docs/adr/0006, "Main ↔ worker
@@ -10,7 +12,7 @@ import type { StreamConfigureRequest, StreamRequest } from '@/shared/api';
  *
  * Every message carries the `session` the main thread started: it increments the number on each
  * `start`, and drops whatever the worker still sends for an older session, so a restart never
- * mixes two streams. `get-event`/`event` (T8) join these unions later.
+ * mixes two streams.
  */
 
 /** Opens a stream: closes the current connection and starts a new session with a new buffer. */
@@ -39,8 +41,21 @@ export interface WorkerConfigureMessage extends StreamConfigureRequest {
   readonly session: number;
 }
 
+/**
+ * Asks for the full event at a buffer position, payload included (the details view). The worker
+ * answers with `event` echoing `requestId`; a request for an older session gets no answer.
+ */
+export interface WorkerGetEventMessage {
+  readonly type: 'get-event';
+  readonly session: number;
+  /** Numbers the request within the store; the answer carries it back. */
+  readonly requestId: number;
+  readonly position: number;
+}
+
 /** Main thread → worker. */
-export type ToWorkerMessage = WorkerStartMessage | WorkerStopMessage | WorkerConfigureMessage;
+export type ToWorkerMessage =
+  WorkerStartMessage | WorkerStopMessage | WorkerConfigureMessage | WorkerGetEventMessage;
 
 /** The server accepted the connection (its `hello`): the stream has started. */
 export interface WorkerHelloMessage extends Pick<HelloMessage, 'stream' | 'limits' | 'expiresAt'> {
@@ -97,6 +112,26 @@ export interface WorkerStreamErrorMessage extends Pick<ErrorMessage, 'code' | 'm
   readonly session: number;
 }
 
+/**
+ * The event at a position as the details view shows it. The payload is pretty-printed (and cut
+ * at `MAX_PAYLOAD_TEXT_LENGTH`) in the worker, so the main thread neither clones a large object
+ * graph nor runs `JSON.stringify` on it.
+ */
+export interface LogEventDetails {
+  /** Every field of the event but the payload. */
+  readonly event: Omit<LogEvent, 'payload'>;
+  /** The payload as text; `undefined` for an event without one. */
+  readonly payload: PayloadText | undefined;
+}
+
+/** The answer to `get-event`: the event's details, or `undefined` once the position is evicted. */
+export interface WorkerEventMessage {
+  readonly type: 'event';
+  readonly session: number;
+  readonly requestId: number;
+  readonly details: LogEventDetails | undefined;
+}
+
 /** Worker → main thread. */
 export type FromWorkerMessage =
   | WorkerHelloMessage
@@ -104,7 +139,8 @@ export type FromWorkerMessage =
   | WorkerCountersMessage
   | WorkerClosedMessage
   | WorkerConfigMessage
-  | WorkerStreamErrorMessage;
+  | WorkerStreamErrorMessage
+  | WorkerEventMessage;
 
 /**
  * One end of a message channel, as the worker global scope, a `Worker` or a `MessagePort`
