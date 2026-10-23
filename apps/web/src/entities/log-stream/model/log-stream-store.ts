@@ -1,10 +1,5 @@
 import { createEventStore, type EventStore, type StreamCounters } from '@lsv/core';
-import {
-  assertNever,
-  type Scenario,
-  type StreamLimits,
-  type StreamSettings,
-} from '@lsv/protocol';
+import { assertNever, type Scenario, type StreamLimits, type StreamSettings } from '@lsv/protocol';
 
 import { SOCKET_FAILURE_CODES, type StreamRequest } from '@/shared/api';
 
