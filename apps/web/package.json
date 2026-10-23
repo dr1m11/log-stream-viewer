@@ -12,7 +12,8 @@
     "preview": "vite preview",
     "typecheck": "tsc -b",
     "lint:fsd": "steiger ./src",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "perf": "playwright test --config playwright.perf.config.ts"
   },
   "dependencies": {
     "@lsv/core": "workspace:*",
