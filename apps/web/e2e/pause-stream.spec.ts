@@ -123,7 +123,8 @@ test.describe('pause stream', () => {
       page.getByText('Paused: no events to show. Resume to see the newest.'),
     ).toBeVisible();
     expect(await rowCount(grid)).toBe(0);
-    expect(parseCount(await warning.textContent())).toBeGreaterThan(1000);
+    // At least the whole paused view (1000 rows); exactly 1000 when eviction stops at its end.
+    expect(parseCount(await warning.textContent())).toBeGreaterThanOrEqual(1000);
 
     await expectNoA11yViolations();
 

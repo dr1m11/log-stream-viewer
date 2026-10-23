@@ -461,6 +461,30 @@ describe('LogGrid', () => {
       expect(screen.queryByRole('button', { name: 'Jump to latest' })).not.toBeInTheDocument();
     });
 
+    it('does not track the tail while paused, even after a click on the last row or End', async () => {
+      const user = userEvent.setup();
+      const { buffer, append } = createBuffer(1000);
+      append(1000);
+      const { grid, update } = renderPausable(buffer);
+      update(1000);
+
+      await user.click(within(grid).getByText('event 1000'));
+      append(100);
+      update(1000);
+      const newest = within(grid).getByText('event 1000');
+      expect(activeRow(grid)).toHaveTextContent('event 1000');
+
+      await user.keyboard('{End}');
+      scrollTo(grid, maxScrollTop(grid));
+      append(100);
+      update(1000);
+
+      // Keyed by position and anchored: the newest row keeps its element as `start` grows.
+      expect(within(grid).getByText('event 1000')).toBe(newest);
+      expect(dataRows(grid).at(-1)).toHaveTextContent('event 1000');
+      expect(grid.scrollTop).toBe(maxScrollTop(grid));
+    });
+
     it('keeps a position the user scrolled to while paused', () => {
       const { buffer, append } = createBuffer(1000);
       append(1000);

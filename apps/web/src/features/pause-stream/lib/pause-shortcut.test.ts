@@ -58,10 +58,22 @@ describe('isPauseShortcut', () => {
     expect(isPauseShortcut(keydown({ defaultPrevented: true }))).toBe(false);
   });
 
+  it('accepts P on inputs that take no text', () => {
+    for (const html of [
+      '<input type="radio">',
+      '<input type="checkbox">',
+      '<input type="range">',
+      '<input type="button" value="Go">',
+    ]) {
+      expect(isPauseShortcut(keydown({ target: mount(html) }))).toBe(true);
+    }
+  });
+
   it('ignores keys typed into form fields', () => {
     for (const html of [
       '<input type="number">',
-      '<input type="range">',
+      '<input>',
+      '<input type="search">',
       '<textarea></textarea>',
       '<select><option>a</option></select>',
       '<div contenteditable="true"><span>text</span></div>',

@@ -1,8 +1,17 @@
 /** The key shown for the shortcut in hints (`Kbd`) and `aria-keyshortcuts`. */
 export const PAUSE_SHORTCUT_KEY = 'P';
 
-/** Elements where a letter key types text or picks an option instead of running a shortcut. */
-const TYPING_TARGETS = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])';
+/**
+ * Elements where a letter key types text or picks an option instead of running a shortcut. Inputs
+ * that take no text (radios, checkboxes, buttons, sliders…) are not among them, so P still works
+ * while, say, a theme radio has the focus.
+ */
+const TYPING_TARGETS = [
+  'input:not([type="checkbox"], [type="radio"], [type="button"], [type="submit"], [type="reset"], [type="image"], [type="file"], [type="color"], [type="range"])',
+  'textarea',
+  'select',
+  '[contenteditable]:not([contenteditable="false"])',
+].join(', ');
 
 /** The parts of a `KeyboardEvent` the shortcut reads. */
 export type ShortcutKeyEvent = Pick<

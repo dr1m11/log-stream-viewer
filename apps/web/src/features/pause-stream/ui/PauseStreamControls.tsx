@@ -1,5 +1,5 @@
 import { Pause, Play, TriangleAlert } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   eventsSincePause,
@@ -32,28 +32,40 @@ function plural(count: number, one: string, many: string): string {
 }
 
 /**
- * What the pause holds back: the events received since (they appear on resume) and, once the full
- * buffer starts evicting rows the user could have scrolled to, how many are gone. Both counts change
- * every frame, so neither is a live region; {@link PauseAnnouncement} speaks for them.
+ * A count that changes every frame while paused, as text: the only part of the paused status that
+ * re-renders per frame. Never a live region; {@link PauseAnnouncement} speaks for it.
  */
-function PausedStatus({ store, onResume }: { store: LogStreamStore; onResume: () => void }) {
-  const newEvents = useLogStreamSelector(store, selectNewEvents);
-  const evicted = useLogStreamSelector(store, selectEvicted);
+function LiveCount({
+  store,
+  select,
+  one,
+  many,
+}: {
+  store: LogStreamStore;
+  select: (snapshot: LogStreamSnapshot) => number;
+  one: string;
+  many: string;
+}) {
+  const count = useLogStreamSelector(store, select);
+  return plural(count, one, many);
+}
+
+/**
+ * Shown once the full buffer starts evicting rows the user could have scrolled to when pausing;
+ * re-renders only when that starts, its count updates on its own.
+ */
+function EvictionWarning({ store }: { store: LogStreamStore }) {
+  const evicting = useLogStreamSelector(store, selectEvicting);
+  if (!evicting) return null;
   return (
-    <>
-      <Badge tone="accent">{plural(newEvents, 'new event', 'new events')}</Badge>
-      <Button size="sm" onClick={onResume}>
-        <Play aria-hidden="true" />
-        Resume
-      </Button>
-      {evicted > 0 && (
-        // Wraps on narrow screens instead of overflowing like a one-line badge.
-        <Badge tone="warning" className="h-auto min-h-5 py-0.5 whitespace-normal">
-          <TriangleAlert aria-hidden="true" />
-          {plural(evicted, 'older event', 'older events')} evicted while paused — the buffer is full
-        </Badge>
-      )}
-    </>
+    // Wraps on narrow screens instead of overflowing like a one-line badge.
+    <Badge tone="warning" className="h-auto min-h-5 py-0.5 whitespace-normal">
+      <TriangleAlert aria-hidden="true" />
+      <span>
+        <LiveCount store={store} select={selectEvicted} one="older event" many="older events" />{' '}
+        evicted while paused — the buffer is full
+      </span>
+    </Badge>
   );
 }
 
@@ -95,6 +107,11 @@ function PauseAnnouncement({ store }: { store: LogStreamStore }) {
 export function PauseStreamControls({ store }: { store: LogStreamStore }) {
   const paused = useLogStreamSelector(store, selectPaused);
   const toggleRef = useRef<HTMLButtonElement>(null);
+  const resume = useCallback(() => {
+    store.resume();
+    // The Resume button disappears with the pause: keep the focus next to it.
+    toggleRef.current?.focus();
+  }, [store]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent): void {
@@ -123,15 +140,18 @@ export function PauseStreamControls({ store }: { store: LogStreamStore }) {
       >
         <Pause aria-hidden="true" />
       </IconButton>
+      {/* While paused only the counts re-render per frame; this component, once per toggle. */}
       {paused && (
-        <PausedStatus
-          store={store}
-          onResume={() => {
-            store.resume();
-            // The Resume button disappears with the pause: keep the focus next to it.
-            toggleRef.current?.focus();
-          }}
-        />
+        <>
+          <Badge tone="accent">
+            <LiveCount store={store} select={selectNewEvents} one="new event" many="new events" />
+          </Badge>
+          <Button size="sm" onClick={resume}>
+            <Play aria-hidden="true" />
+            Resume
+          </Button>
+          <EvictionWarning store={store} />
+        </>
       )}
       <PauseAnnouncement store={store} />
     </div>
