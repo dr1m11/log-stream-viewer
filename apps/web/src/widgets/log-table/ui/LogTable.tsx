@@ -34,5 +34,7 @@ export function LogTable({ store }: LogTableProps) {
   const start = useLogStreamSelector(store, selectStart);
   const end = useLogStreamSelector(store, selectEnd);
   const paused = useLogStreamSelector(store, selectPaused);
-  return <LogGrid buffer={buffer} start={start} end={end} paused={paused} />;
+  return (
+    <LogGrid buffer={buffer} start={start} end={end} paused={paused} getEvent={store.getEvent} />
+  );
 }
