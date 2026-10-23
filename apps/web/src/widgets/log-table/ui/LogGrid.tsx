@@ -119,7 +119,9 @@ export interface LogGridProps {
  * details are measured, by a `ResizeObserver` of the grid's own: the virtualizer's
  * `measureElement` would key the size by virtual index, which moves with every eviction, and
  * each new size would rebuild its measurements in O(count). The grid adds the measured height to
- * its content height, to the offset of the rows below the open row and to the anchoring.
+ * its content height, to the offset of the rows below the open row and to the anchoring. The
+ * table is a `treegrid`, the grid role whose rows ARIA lets carry `aria-expanded`, so a screen
+ * reader announces the state of the active row.
  */
 export function LogGrid({ buffer, start, end, paused = false, getEvent }: LogGridProps) {
   const headingId = useId();
@@ -459,10 +461,10 @@ export function LogGrid({ buffer, start, end, paused = false, getEvent }: LogGri
         header: the rounded panel clips an outline outside the grid, and the header covers the
         top edge of one drawn on the grid itself.
       */}
-      <div className="relative min-h-0 flex-1 after:pointer-events-none after:absolute after:inset-0 after:z-20 after:rounded-b-md has-[[role=grid]:focus-visible]:after:outline-2 has-[[role=grid]:focus-visible]:after:-outline-offset-2 has-[[role=grid]:focus-visible]:after:outline-focus">
+      <div className="relative min-h-0 flex-1 after:pointer-events-none after:absolute after:inset-0 after:z-20 after:rounded-b-md has-[[role=treegrid]:focus-visible]:after:outline-2 has-[[role=treegrid]:focus-visible]:after:-outline-offset-2 has-[[role=treegrid]:focus-visible]:after:outline-focus">
         <div
           ref={scrollRef}
-          role="grid"
+          role="treegrid"
           aria-labelledby={headingId}
           aria-rowcount={count + 1}
           aria-colcount={COLUMN_COUNT}

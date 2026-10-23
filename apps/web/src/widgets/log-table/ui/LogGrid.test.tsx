@@ -62,7 +62,7 @@ function resizeViewport(height: number): void {
  */
 function installGridLayout(): void {
   const scrollTops = new WeakMap<Element, number>();
-  const isGrid = (element: Element): boolean => element.getAttribute('role') === 'grid';
+  const isGrid = (element: Element): boolean => element.getAttribute('role') === 'treegrid';
   const contentHeight = (element: Element): number => {
     // The container of the data rows' rowgroup (the first rowgroup is the sticky header).
     const rows = element.querySelectorAll('[role="rowgroup"]')[1]?.parentElement;
@@ -135,7 +135,7 @@ function renderGrid(buffer: EventStore, getEvent: GetEvent = fetchEvent) {
   const view = render(grid());
   return {
     ...view,
-    grid: screen.getByRole('grid', { name: 'Events' }),
+    grid: screen.getByRole('treegrid', { name: 'Events' }),
     /** Renders the grid again with the buffer's current range, as a new snapshot would. */
     update: (): void => {
       view.rerender(grid());
