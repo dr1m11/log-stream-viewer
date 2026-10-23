@@ -7,7 +7,7 @@ import { cn } from '@/shared/lib/cn';
 import { IconButton } from '@/shared/ui/icon-button';
 
 import { ROW_HEIGHT } from '../lib/table-scroll';
-import { EventDetails, type GetEvent } from './EventDetails';
+import { EventDetails, type GetEventDetails } from './EventDetails';
 
 /**
  * Column layout shared by the header row and the data rows: details toggle, time, level, service,
@@ -24,11 +24,11 @@ export const COLUMN_COUNT = 5;
 export const DETAILS_TOGGLE_LABEL = 'Event details';
 
 /**
- * Find the disclosure button and the details cell (by their `data-` attributes): the grid handles
+ * Find the disclosure button and the details row (by their `data-` attributes): the grid handles
  * their clicks by delegation, so no row gets a handler of its own.
  */
 export const DETAILS_TOGGLE_SELECTOR = '[data-details-toggle]';
-export const DETAILS_CELL_SELECTOR = '[data-details]';
+export const DETAILS_ROW_SELECTOR = '[data-details]';
 
 interface CellsProps {
   readonly buffer: LogBufferView;
@@ -115,77 +115,98 @@ export interface LogRowProps {
   readonly position: number;
   /** Virtual index (`position - start`), read by the virtualizer from `data-index`. */
   readonly index: number;
+  /** `aria-rowindex`: the header is row 1, and an open details row before this one counts too. */
+  readonly rowIndex: number;
   /** Element id, the target of the grid's `aria-activedescendant`. */
   readonly id: string;
   /** Whether this is the grid's active row (keyboard cursor). */
   readonly active: boolean;
-  /** Whether the row's details are open. */
+  /** Whether the row's details are open (the details row follows it). */
   readonly expanded: boolean;
-  /** Fetches the full event for the details. */
-  readonly getEvent: GetEvent;
-  /** Attached to the details cell of the expanded row, which the grid measures. */
-  readonly detailsRef: Ref<HTMLDivElement>;
 }
 
 // Shared by every row and every render: the active state is styled through `data-active`.
 const ROW_STYLE: CSSProperties = { height: ROW_HEIGHT };
-// The expanded row: its own line, then the details on a second grid line of their own height.
-const EXPANDED_ROW_STYLE: CSSProperties = { gridTemplateRows: `${String(ROW_HEIGHT)}px auto` };
 const ROW_CLASS = cn(
   ROW_COLUMNS,
   'relative whitespace-nowrap',
-  'data-active:before:absolute data-active:before:top-0 data-active:before:left-0 data-active:before:h-7 data-active:before:w-1 data-active:before:bg-accent',
+  'data-active:before:absolute data-active:before:inset-y-0 data-active:before:left-0 data-active:before:w-1 data-active:before:bg-accent',
   'group-focus-visible:data-active:outline-2 group-focus-visible:data-active:-outline-offset-2 group-focus-visible:data-active:outline-focus',
 );
 
+/** Id of the details region of the row with element id `rowId`. */
+function detailsIdOf(rowId: string): string {
+  return `${rowId}-details`;
+}
+
 /**
- * One data row: {@link ROW_HEIGHT} tall, or taller with its details open — the grid measures that
- * one row itself (see `LogGrid`). The active row is marked with an accent bar, and with a focus
- * outline while the grid has keyboard focus.
+ * One data row, {@link ROW_HEIGHT} tall: a level-1 row of the treegrid. The active row is marked
+ * with an accent bar, and with a focus outline while the grid has keyboard focus.
  */
 export const LogRow = memo(function LogRow({
   buffer,
   position,
   index,
+  rowIndex,
   id,
   active,
   expanded,
-  getEvent,
-  detailsRef,
 }: LogRowProps) {
-  const detailsId = `${id}-details`;
   return (
     <div
       role="row"
       id={id}
-      // The header is row 1.
-      aria-rowindex={index + 2}
+      aria-rowindex={rowIndex}
+      aria-level={1}
       aria-expanded={expanded}
       data-index={index}
       data-active={active || undefined}
-      style={expanded ? EXPANDED_ROW_STYLE : ROW_STYLE}
+      style={ROW_STYLE}
       className={ROW_CLASS}
     >
       <div role="gridcell" className="flex">
-        <DetailsToggle expanded={expanded} controls={expanded ? detailsId : undefined} />
+        <DetailsToggle expanded={expanded} controls={expanded ? detailsIdOf(id) : undefined} />
       </div>
       <LogCells buffer={buffer} position={position} />
-      {expanded && (
-        <div
-          role="gridcell"
-          ref={detailsRef}
-          className="col-span-full -mr-3 -ml-1.5 self-stretch"
-          data-details=""
-        >
-          <EventDetails
-            key={position}
-            buffer={buffer}
-            position={position}
-            getEvent={getEvent}
-            id={detailsId}
-          />
-        </div>
-      )}
     </div>
   );
 });
+
+export interface DetailsRowProps {
+  readonly buffer: LogBufferView;
+  /** Buffer position of the open event. */
+  readonly position: number;
+  /** `aria-rowindex`: right after the open row's. */
+  readonly rowIndex: number;
+  /** Element id of the open row; the details region's id derives from it. */
+  readonly rowId: string;
+  readonly getEventDetails: GetEventDetails;
+  /** Attached to this row, which the grid measures: the only row whose height is not fixed. */
+  readonly measureRef: Ref<HTMLDivElement>;
+}
+
+/**
+ * The open row's details: a level-2 row of the treegrid right after it (the child that its
+ * `aria-expanded` discloses), with one cell across every column.
+ */
+export function DetailsRow({
+  buffer,
+  position,
+  rowIndex,
+  rowId,
+  getEventDetails,
+  measureRef,
+}: DetailsRowProps) {
+  return (
+    <div role="row" ref={measureRef} aria-rowindex={rowIndex} aria-level={2} data-details="">
+      <div role="gridcell" aria-colspan={COLUMN_COUNT}>
+        <EventDetails
+          buffer={buffer}
+          position={position}
+          getEventDetails={getEventDetails}
+          id={detailsIdOf(rowId)}
+        />
+      </div>
+    </div>
+  );
+}

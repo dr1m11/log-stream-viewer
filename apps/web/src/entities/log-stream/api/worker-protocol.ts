@@ -3,6 +3,8 @@ import type { ConfigMessage, ErrorMessage, HelloMessage, LogEvent } from '@lsv/p
 
 import type { StreamConfigureRequest, StreamRequest } from '@/shared/api';
 
+import type { PayloadText } from '../lib/format-payload';
+
 /**
  * Messages between the main thread and the stream worker (docs/adr/0006, "Main ↔ worker
  * messages"). Plain discriminated unions, no RPC library: transfers stay explicit and stale
@@ -111,14 +113,23 @@ export interface WorkerStreamErrorMessage extends Pick<ErrorMessage, 'code' | 'm
 }
 
 /**
- * The answer to `get-event`: the event from the worker's buffer with its payload (structured-
- * cloned), or `undefined` once the position has been evicted.
+ * The event at a position as the details view shows it. The payload is pretty-printed (and cut
+ * at `MAX_PAYLOAD_TEXT_LENGTH`) in the worker, so the main thread neither clones a large object
+ * graph nor runs `JSON.stringify` on it.
  */
+export interface LogEventDetails {
+  /** Every field of the event but the payload. */
+  readonly event: Omit<LogEvent, 'payload'>;
+  /** The payload as text; `undefined` for an event without one. */
+  readonly payload: PayloadText | undefined;
+}
+
+/** The answer to `get-event`: the event's details, or `undefined` once the position is evicted. */
 export interface WorkerEventMessage {
   readonly type: 'event';
   readonly session: number;
   readonly requestId: number;
-  readonly event: LogEvent | undefined;
+  readonly details: LogEventDetails | undefined;
 }
 
 /** Worker → main thread. */

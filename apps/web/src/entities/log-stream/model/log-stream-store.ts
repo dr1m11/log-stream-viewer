@@ -1,16 +1,10 @@
 import { createEventStore, type EventStore, type StreamCounters } from '@lsv/core';
-import {
-  assertNever,
-  type LogEvent,
-  type Scenario,
-  type StreamLimits,
-  type StreamSettings,
-} from '@lsv/protocol';
+import { assertNever, type Scenario, type StreamLimits, type StreamSettings } from '@lsv/protocol';
 
 import { SOCKET_FAILURE_CODES, type StreamRequest } from '@/shared/api';
 
 import { spawnStreamWorker, type StreamWorker } from '../api/spawn-stream-worker';
-import type { FromWorkerMessage } from '../api/worker-protocol';
+import type { FromWorkerMessage, LogEventDetails } from '../api/worker-protocol';
 
 /** Where the connection is. `connected` starts with the server's `hello`, not with the socket opening. */
 export type ConnectionStatus =
@@ -153,14 +147,15 @@ export interface LogStreamStore {
   /** Lets the view follow the stream again (`paused` becomes `undefined`) and publishes at once. */
   readonly resume: () => void;
   /**
-   * The full event at a buffer position, payload included, from the worker's buffer (the replica
-   * keeps no payloads). Resolves `undefined` when the position is no longer retained — evicted, or
+   * The details of the event at a buffer position from the worker's buffer, which keeps the
+   * payloads the replica drops: every field, and the payload pretty-printed (and cut at
+   * `MAX_PAYLOAD_TEXT_LENGTH`) in the worker. Resolves `undefined` when the position is no longer retained — evicted, or
    * the session it belongs to is over: a new session, `stop()`, a failed worker and the
    * {@link MAX_PENDING_EVENT_REQUESTS} bound all resolve the requests still waiting with
    * `undefined`, so a caller never waits forever and never sees an event of another stream. It
    * never rejects.
    */
-  readonly getEvent: (position: number) => Promise<LogEvent | undefined>;
+  readonly getEventDetails: (position: number) => Promise<LogEventDetails | undefined>;
 }
 
 /**
@@ -171,7 +166,7 @@ export interface LogStreamStore {
 export const MAX_AUTO_RESTARTS = 3;
 
 /**
- * `getEvent` requests waiting for the worker's answer at most; a further request resolves the
+ * `getEventDetails` requests waiting for the worker's answer at most; a further request resolves the
  * oldest one with `undefined`. The details view asks for one event at a time, so the bound only
  * matters for a caller that does not wait for its answers.
  */
@@ -254,8 +249,8 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
   /** Numbers the `configure` request ids; never reset, so an id is unique per store. */
   let configureRequests = 0;
   let paused: PausedView | undefined;
-  /** `getEvent` callers waiting for the worker, by request id, oldest first (insertion order). */
-  const pendingEvents = new Map<number, (event: LogEvent | undefined) => void>();
+  /** `getEventDetails` callers waiting for the worker, by request id, oldest first (insertion order). */
+  const pendingEvents = new Map<number, (event: LogEventDetails | undefined) => void>();
   /** Numbers the `get-event` requests; never reset, so an id is unique per store. */
   let eventRequests = 0;
 
@@ -325,7 +320,7 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
     }
   }
 
-  /** Resolves every waiting `getEvent` with `undefined`: their session is over or unreachable. */
+  /** Resolves every waiting `getEventDetails` with `undefined`: their session is over or unreachable. */
   function settleEventRequests(): void {
     for (const resolve of pendingEvents.values()) resolve(undefined);
     pendingEvents.clear();
@@ -378,7 +373,7 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
       case 'event': {
         const resolve = pendingEvents.get(data.requestId);
         pendingEvents.delete(data.requestId);
-        resolve?.(data.event);
+        resolve?.(data.details);
         // Nothing in the snapshot changed.
         return;
       }
@@ -522,7 +517,7 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
       paused = undefined;
       publishNow();
     },
-    getEvent(position) {
+    getEventDetails(position) {
       // The worker's buffer is never behind the replica: what the replica evicted, it evicted too.
       if (worker === undefined || !buffer.has(position)) return Promise.resolve(undefined);
       if (pendingEvents.size >= MAX_PENDING_EVENT_REQUESTS) {
@@ -535,7 +530,7 @@ export function createLogStreamStore(options: LogStreamOptions): LogStreamStore 
       }
       eventRequests++;
       const requestId = eventRequests;
-      const answer = new Promise<LogEvent | undefined>((resolve) => {
+      const answer = new Promise<LogEventDetails | undefined>((resolve) => {
         pendingEvents.set(requestId, resolve);
       });
       worker.postMessage({ type: 'get-event', session, requestId, position });

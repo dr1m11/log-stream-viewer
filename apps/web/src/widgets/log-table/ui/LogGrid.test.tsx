@@ -5,11 +5,13 @@ import userEvent from '@testing-library/user-event';
 import type { ReactElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { LogEventDetails } from '@/entities/log-stream';
 import { testLogEvent } from '@/shared/lib/testing';
 import { TooltipProvider } from '@/shared/ui/tooltip';
 
+import { truncatedNote } from '../lib/payload-note';
 import { HEADER_HEIGHT, ROW_HEIGHT } from '../lib/table-scroll';
-import { EVICTED_TEXT, type GetEvent, NO_PAYLOAD_TEXT } from './EventDetails';
+import { EVICTED_TEXT, type GetEventDetails, NO_PAYLOAD_TEXT } from './EventDetails';
 import { LogGrid } from './LogGrid';
 
 /** Height of the grid's scroll viewport in the fake layout, header included. */
@@ -120,17 +122,31 @@ function createBuffer(capacity: number) {
   };
 }
 
+/** What the worker answers for `event`: its fields, and its payload pretty-printed. */
+function detailsOf(event: LogEvent): LogEventDetails {
+  const { payload, ...fields } = event;
+  if (payload === undefined) return { event: fields, payload: undefined };
+  const text = JSON.stringify(payload, null, 2);
+  return { event: fields, payload: { text, truncated: false, length: text.length } };
+}
+
 /** Answers like the worker's buffer that holds every event appended (position `p`, `seq` `p + 1`). */
-const fetchEvent: GetEvent = (position) => Promise.resolve(streamEvent(position + 1));
+const fetchEvent: GetEventDetails = (position) =>
+  Promise.resolve(detailsOf(streamEvent(position + 1)));
 
 function withTooltips(ui: ReactElement): ReactElement {
   return <TooltipProvider delayDuration={0}>{ui}</TooltipProvider>;
 }
 
-function renderGrid(buffer: EventStore, getEvent: GetEvent = fetchEvent) {
+function renderGrid(buffer: EventStore, getEventDetails: GetEventDetails = fetchEvent) {
   const grid = (): ReactElement =>
     withTooltips(
-      <LogGrid buffer={buffer} start={buffer.start} end={buffer.end} getEvent={getEvent} />,
+      <LogGrid
+        buffer={buffer}
+        start={buffer.start}
+        end={buffer.end}
+        getEventDetails={getEventDetails}
+      />,
     );
   const view = render(grid());
   return {
@@ -143,9 +159,11 @@ function renderGrid(buffer: EventStore, getEvent: GetEvent = fetchEvent) {
   };
 }
 
-/** The data rows in the DOM, oldest first (the header row is the first row). */
+/** The event rows in the DOM, oldest first: level 1 (not the header, not a details row). */
 function dataRows(grid: HTMLElement): HTMLElement[] {
-  return within(grid).getAllByRole('row').slice(1);
+  return within(grid)
+    .getAllByRole('row')
+    .filter((row) => row.getAttribute('aria-level') === '1');
 }
 
 function maxScrollTop(grid: HTMLElement): number {
@@ -459,7 +477,7 @@ describe('LogGrid', () => {
           buffer={second.buffer}
           start={second.buffer.start}
           end={second.buffer.end}
-          getEvent={fetchEvent}
+          getEventDetails={fetchEvent}
         />,
       ),
     );
@@ -478,12 +496,16 @@ describe('LogGrid', () => {
         end: pausedEnd === undefined ? buffer.end : Math.max(buffer.start, pausedEnd),
         paused: pausedEnd !== undefined,
       });
-      const view = render(withTooltips(<LogGrid {...props(undefined)} getEvent={fetchEvent} />));
+      const view = render(
+        withTooltips(<LogGrid {...props(undefined)} getEventDetails={fetchEvent} />),
+      );
       return {
         grid: screen.getByRole('treegrid', { name: 'Events' }),
         /** A new snapshot: paused at `pausedEnd`, or following the stream without it. */
         update: (pausedEnd?: number): void => {
-          view.rerender(withTooltips(<LogGrid {...props(pausedEnd)} getEvent={fetchEvent} />));
+          view.rerender(
+            withTooltips(<LogGrid {...props(pausedEnd)} getEventDetails={fetchEvent} />),
+          );
         },
       };
     }
@@ -600,8 +622,8 @@ describe('LogGrid', () => {
       expect(grid.scrollTop).toBe(360 * ROW_HEIGHT + DETAILS_HEIGHT);
       expect(within(grid).getByText('event 511')).toBe(message);
       expect(screen.getByRole('region', { name: 'Details of event #505' })).toBe(details);
-      // Still paused: the view ends at the pause point.
-      expect(grid).toHaveAttribute('aria-rowcount', String(1000 - 150 + 1));
+      // Still paused: the view ends at the pause point (plus the header and the details row).
+      expect(grid).toHaveAttribute('aria-rowcount', String(1000 - 150 + 2));
     });
 
     it('says why the paused view is empty once eviction passed the pause point', () => {
@@ -664,8 +686,8 @@ describe('LogGrid', () => {
       const user = userEvent.setup();
       const { buffer, append } = createBuffer(1000);
       append(30);
-      let answer: (event: LogEvent | undefined) => void = () => undefined;
-      const getEvent: GetEvent = () =>
+      let answer: (details: LogEventDetails | undefined) => void = () => undefined;
+      const getEvent: GetEventDetails = () =>
         new Promise((resolve) => {
           answer = resolve;
         });
@@ -676,7 +698,7 @@ describe('LogGrid', () => {
       const details = screen.getByRole('region', { name: 'Details of event #25' });
       expect(within(details).getByRole('status')).toHaveTextContent('Loading payload…');
       await act(async () => {
-        answer(streamEvent(25));
+        answer(detailsOf(streamEvent(25)));
         await Promise.resolve();
       });
       expect(within(details).queryByRole('status')).not.toBeInTheDocument();
@@ -816,7 +838,7 @@ describe('LogGrid', () => {
       scrollTo(grid, 500 * ROW_HEIGHT + DETAILS_HEIGHT);
       expect(within(grid).getByText('event 501')).toBeInTheDocument();
       const [first] = dataRows(grid);
-      const firstIndex = Number(first?.getAttribute('aria-rowindex')) - 2;
+      const firstIndex = Number(first?.getAttribute('data-index'));
       expect(firstIndex).toBeGreaterThan(104);
       expect(first?.parentElement?.style.transform).toBe(
         `translateY(${String(firstIndex * ROW_HEIGHT + DETAILS_HEIGHT)}px)`,
@@ -854,6 +876,87 @@ describe('LogGrid', () => {
       expect(rowsContainerHeight(grid)).toBe(1000 * ROW_HEIGHT);
       expect(within(grid).getByText('event 501')).toBe(message);
       expect(screen.queryByRole('region', { name: /^Details of event/ })).not.toBeInTheDocument();
+    });
+
+    it('puts the details in a level-2 row after their row, counted in the row indexes', async () => {
+      const user = userEvent.setup();
+      const { buffer, append } = createBuffer(1000);
+      append(30);
+      const { grid } = renderGrid(buffer);
+      expect(grid).toHaveAttribute('aria-rowcount', '31');
+
+      await user.click(within(rowOf(grid, 20)).getByRole('button', { name: 'Event details' }));
+
+      const region = screen.getByRole('region', { name: 'Details of event #20' });
+      const detailsRow = region.closest('[role="row"]');
+      expect(detailsRow).toHaveAttribute('aria-level', '2');
+      expect(detailsRow).toHaveAttribute('aria-rowindex', '22');
+      expect(detailsRow?.previousElementSibling).toBe(rowOf(grid, 20));
+      const cells = within(detailsRow instanceof HTMLElement ? detailsRow : grid).getAllByRole(
+        'gridcell',
+      );
+      expect(cells).toHaveLength(1);
+      expect(cells[0]).toHaveAttribute('aria-colspan', '5');
+      expect(rowOf(grid, 20)).toHaveAttribute('aria-level', '1');
+      expect(rowOf(grid, 20)).toHaveAttribute('aria-rowindex', '21');
+      expect(rowOf(grid, 21)).toHaveAttribute('aria-rowindex', '23');
+      expect(grid).toHaveAttribute('aria-rowcount', '32');
+    });
+
+    it('marks a payload the worker cut, with its whole size', async () => {
+      const user = userEvent.setup();
+      const { buffer, append } = createBuffer(1000);
+      append(30);
+      const cut: GetEventDetails = (position) =>
+        Promise.resolve({
+          event: detailsOf(streamEvent(position + 1)).event,
+          payload: { text: '{\n  "blob": "xxxx', truncated: true, length: 200_000 },
+        });
+      const { grid } = renderGrid(buffer, cut);
+
+      await user.click(within(rowOf(grid, 25)).getByRole('button', { name: 'Event details' }));
+
+      const details = screen.getByRole('region', { name: 'Details of event #25' });
+      expect(await within(details).findByText(/"blob": "xxxx/)).toBeInTheDocument();
+      expect(within(details).getByText(truncatedNote(200_000))).toBeInTheDocument();
+    });
+
+    it('gives the focus back to the grid when the focused details are evicted', async () => {
+      const user = userEvent.setup();
+      const { buffer, append } = createBuffer(1000);
+      append(1000);
+      const { grid, update } = renderGrid(buffer);
+      scrollTo(grid, 10 * ROW_HEIGHT);
+      await user.click(within(rowOf(grid, 15)).getByRole('button', { name: 'Event details' }));
+      await user.tab();
+      expect(screen.getByRole('region', { name: 'Details of event #15' })).toHaveFocus();
+
+      append(100);
+      update();
+
+      expect(screen.queryByRole('region', { name: /^Details of event/ })).not.toBeInTheDocument();
+      expect(grid).toHaveFocus();
+    });
+
+    it('keeps the view inside open details whose row line is scrolled away as batches arrive', async () => {
+      const user = userEvent.setup();
+      const { buffer, append } = createBuffer(2000);
+      append(1000);
+      const { grid, update } = renderGrid(buffer);
+      scrollTo(grid, 100 * ROW_HEIGHT);
+      await user.click(within(rowOf(grid, 101)).getByRole('button', { name: 'Event details' }));
+      // The row's line (position 100) is under the header; the view starts 90 px into its details.
+      const inside = 101 * ROW_HEIGHT + 90;
+      scrollTo(grid, inside);
+      const details = screen.getByRole('region', { name: 'Details of event #101' });
+
+      append(20);
+      update();
+      append(20);
+      update();
+
+      expect(grid.scrollTop).toBe(inside);
+      expect(screen.getByRole('region', { name: 'Details of event #101' })).toBe(details);
     });
   });
 });

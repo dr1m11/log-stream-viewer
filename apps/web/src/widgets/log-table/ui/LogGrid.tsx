@@ -35,11 +35,12 @@ import {
   rowTop,
   scrollTopToReveal,
 } from '../lib/table-scroll';
-import type { GetEvent } from './EventDetails';
+import type { GetEventDetails } from './EventDetails';
 import {
   COLUMN_COUNT,
-  DETAILS_CELL_SELECTOR,
+  DETAILS_ROW_SELECTOR,
   DETAILS_TOGGLE_SELECTOR,
+  DetailsRow,
   LogRow,
   ROW_COLUMNS,
 } from './LogRow';
@@ -86,8 +87,8 @@ export interface LogGridProps {
    * false again the grid jumps to the newest row and follows.
    */
   readonly paused?: boolean;
-  /** Fetches the full event of an expanded row, payload included (`LogStreamStore.getEvent`). */
-  readonly getEvent: GetEvent;
+  /** Fetches the details of an expanded row's event (`LogStreamStore.getEventDetails`). */
+  readonly getEventDetails: GetEventDetails;
 }
 
 /**
@@ -123,7 +124,7 @@ export interface LogGridProps {
  * table is a `treegrid`, the grid role whose rows ARIA lets carry `aria-expanded`, so a screen
  * reader announces the state of the active row.
  */
-export function LogGrid({ buffer, start, end, paused = false, getEvent }: LogGridProps) {
+export function LogGrid({ buffer, start, end, paused = false, getEventDetails }: LogGridProps) {
   const headingId = useId();
   const rowBaseId = useId();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -225,9 +226,15 @@ export function LogGrid({ buffer, start, end, paused = false, getEvent }: LogGri
   );
 
   /**
-   * Measures the open details: once when they mount (the one forced layout of opening a row),
-   * then whenever they resize (the payload arrives, the viewport width rewraps the text). A
-   * `ResizeObserver` callback runs after layout, so reading the height there forces nothing.
+   * Measures the open details row: once when it mounts, then whenever it resizes (the payload
+   * arrives, a new width rewraps the text). A `ResizeObserver` callback runs after layout, so
+   * reading the height there forces nothing. The first read is synchronous, in the commit that
+   * opens the row: the observer's first notification would set the height only in a later task,
+   * after a frame painted with the wrong content height and offsets; the read costs one layout
+   * per opened row, which the browser would run before that paint anyway.
+   *
+   * When the row leaves the DOM (closed, scrolled out of the rendered window, evicted) while the
+   * focus is inside it, the focus goes back to the grid instead of dropping to `<body>`.
    */
   const measureDetails = useCallback((element: HTMLDivElement | null) => {
     if (element === null) return;
@@ -238,6 +245,10 @@ export function LogGrid({ buffer, start, end, paused = false, getEvent }: LogGri
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => {
+      // Runs before the element is removed, while it still holds the focus.
+      if (element.contains(document.activeElement)) {
+        scrollRef.current?.focus({ preventScroll: true });
+      }
       observer.disconnect();
     };
   }, []);
@@ -365,7 +376,7 @@ export function LogGrid({ buffer, start, end, paused = false, getEvent }: LogGri
   function handleClick(event: MouseEvent<HTMLDivElement>): void {
     const { target } = event;
     // Clicks inside the open details (selecting text) leave the cursor and follow mode alone.
-    if (!(target instanceof Element) || target.closest(DETAILS_CELL_SELECTOR) !== null) return;
+    if (!(target instanceof Element) || target.closest(DETAILS_ROW_SELECTOR) !== null) return;
     const row = target.closest('[data-index]');
     const index = Number(row?.getAttribute('data-index'));
     if (!Number.isInteger(index)) return;
@@ -428,24 +439,41 @@ export function LogGrid({ buffer, start, end, paused = false, getEvent }: LogGri
   // than mounting new ones. Otherwise rows are keyed by position: anchoring keeps the positions in
   // view while eviction shifts their indexes, so each event keeps its DOM node, its cells skip
   // rendering (memo) and a text selection in the view survives incoming batches. Switching modes
-  // remounts the rows in view once. The open row is keyed by position in both modes: recycled by
-  // index, its details would remount (and fetch again) whenever eviction moves its index.
+  // remounts the rows in view once. The open row and its details row are keyed by position in
+  // every mode, so eviction moving their index never remounts the details (or fetches again).
+  //
+  // The details row follows its row as a row of its own (level 2 of the treegrid), so it counts in
+  // `aria-rowcount`, and the rows after it have their `aria-rowindex` one higher.
   const rows = [];
   for (let index = firstIndex; index <= lastIndex; index++) {
     const position = start + index;
+    const afterDetails = expandedRow !== undefined && index > expandedRow.index;
     rows.push(
       <LogRow
         key={tracking && position !== expanded ? `i${String(index)}` : `p${String(position)}`}
         buffer={buffer}
         position={position}
         index={index}
+        // The header is row 1.
+        rowIndex={index + (afterDetails ? 3 : 2)}
         id={rowId(position)}
         active={position === active}
         expanded={position === expanded}
-        getEvent={getEvent}
-        detailsRef={measureDetails}
       />,
     );
+    if (position === expanded) {
+      rows.push(
+        <DetailsRow
+          key={`d${String(position)}`}
+          buffer={buffer}
+          position={position}
+          rowIndex={index + 3}
+          rowId={rowId(position)}
+          getEventDetails={getEventDetails}
+          measureRef={measureDetails}
+        />,
+      );
+    }
   }
 
   return (
@@ -466,7 +494,7 @@ export function LogGrid({ buffer, start, end, paused = false, getEvent }: LogGri
           ref={scrollRef}
           role="treegrid"
           aria-labelledby={headingId}
-          aria-rowcount={count + 1}
+          aria-rowcount={count + (expandedRow === undefined ? 1 : 2)}
           aria-colcount={COLUMN_COUNT}
           aria-activedescendant={activeId}
           tabIndex={0}

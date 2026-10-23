@@ -676,7 +676,7 @@ describe('createLogStreamStore', () => {
     });
   });
 
-  describe('getEvent', () => {
+  describe('getEventDetails', () => {
     /** A connected store whose replica holds the events `seq` 1–`count` at positions 0–`count - 1`. */
     function withRows(count: number, capacity = 10_000) {
       const context = setup(capacity);
@@ -688,6 +688,11 @@ describe('createLogStreamStore', () => {
         counters: counters(),
       });
       return context;
+    }
+
+    /** What the worker answers for the event with `seq`, which has no payload. */
+    function details(seq: number) {
+      return { event: testLogEvent(seq), payload: undefined };
     }
 
     /** The `get-event` messages posted to the current worker. */
@@ -705,34 +710,37 @@ describe('createLogStreamStore', () => {
 
     it("asks the worker for the event at a position and resolves with the worker's answer", async () => {
       const { store, worker, send } = withRows(5);
-      const event = testLogEvent(3, { payload: { orderId: 'o-1' }, traceId: 't-3' });
+      const answerDetails = {
+        event: testLogEvent(3, { traceId: 't-3' }),
+        payload: { text: '{ "orderId": "o-1" }', truncated: false, length: 19 },
+      };
 
-      const answer = store.getEvent(2);
+      const answer = store.getEventDetails(2);
       expect(requests(worker())).toEqual([
         { type: 'get-event', session: 1, requestId: 1, position: 2 },
       ]);
-      send({ type: 'event', session: 1, requestId: 1, event });
+      send({ type: 'event', session: 1, requestId: 1, details: answerDetails });
 
-      await expect(answer).resolves.toEqual(event);
+      await expect(answer).resolves.toEqual(answerDetails);
     });
 
     it('matches answers to requests by request id', async () => {
       const { store, send } = withRows(5);
-      const first = store.getEvent(0);
-      const second = store.getEvent(1);
+      const first = store.getEventDetails(0);
+      const second = store.getEventDetails(1);
 
-      send({ type: 'event', session: 1, requestId: 2, event: testLogEvent(2) });
-      send({ type: 'event', session: 1, requestId: 1, event: testLogEvent(1) });
+      send({ type: 'event', session: 1, requestId: 2, details: details(2) });
+      send({ type: 'event', session: 1, requestId: 1, details: details(1) });
 
-      await expect(first).resolves.toEqual(testLogEvent(1));
-      await expect(second).resolves.toEqual(testLogEvent(2));
+      await expect(first).resolves.toEqual(details(1));
+      await expect(second).resolves.toEqual(details(2));
     });
 
     it('resolves undefined when the worker has evicted the position', async () => {
       const { store, send } = withRows(5);
 
-      const answer = store.getEvent(0);
-      send({ type: 'event', session: 1, requestId: 1, event: undefined });
+      const answer = store.getEventDetails(0);
+      send({ type: 'event', session: 1, requestId: 1, details: undefined });
 
       await expect(answer).resolves.toBeUndefined();
     });
@@ -740,14 +748,14 @@ describe('createLogStreamStore', () => {
     it('resolves undefined without asking when the replica no longer holds the position', async () => {
       const { store, worker } = withRows(1200, 1000);
 
-      await expect(store.getEvent(100)).resolves.toBeUndefined();
-      await expect(store.getEvent(5000)).resolves.toBeUndefined();
+      await expect(store.getEventDetails(100)).resolves.toBeUndefined();
+      await expect(store.getEventDetails(5000)).resolves.toBeUndefined();
       expect(requests(worker())).toEqual([]);
     });
 
     it('settles the requests of a session that is over with undefined and drops their answers', async () => {
       const { store, send, hello } = withRows(5);
-      const answer = store.getEvent(1);
+      const answer = store.getEventDetails(1);
 
       store.start();
       await expect(answer).resolves.toBeUndefined();
@@ -756,24 +764,24 @@ describe('createLogStreamStore', () => {
       hello(2);
       nextFrame();
       const snapshot = store.getSnapshot();
-      send({ type: 'event', session: 1, requestId: 1, event: testLogEvent(2) });
+      send({ type: 'event', session: 1, requestId: 1, details: details(2) });
       nextFrame();
       expect(store.getSnapshot()).toBe(snapshot);
     });
 
     it('settles pending requests on stop() and answers undefined while stopped', async () => {
       const { store } = withRows(5);
-      const answer = store.getEvent(1);
+      const answer = store.getEventDetails(1);
 
       store.stop();
 
       await expect(answer).resolves.toBeUndefined();
-      await expect(store.getEvent(1)).resolves.toBeUndefined();
+      await expect(store.getEventDetails(1)).resolves.toBeUndefined();
     });
 
     it('settles pending requests when the worker fails', async () => {
       const { store, worker } = withRows(5);
-      const answer = store.getEvent(1);
+      const answer = store.getEventDetails(1);
 
       worker().fail('Script error');
 
@@ -783,12 +791,12 @@ describe('createLogStreamStore', () => {
     it(`keeps at most ${String(MAX_PENDING_EVENT_REQUESTS)} requests waiting, settling the oldest`, async () => {
       const { store, send } = withRows(100);
       const answers = Array.from({ length: MAX_PENDING_EVENT_REQUESTS + 1 }, (_, index) =>
-        store.getEvent(index),
+        store.getEventDetails(index),
       );
 
       await expect(answers[0]).resolves.toBeUndefined();
-      send({ type: 'event', session: 1, requestId: 2, event: testLogEvent(2) });
-      await expect(answers[1]).resolves.toEqual(testLogEvent(2));
+      send({ type: 'event', session: 1, requestId: 2, details: details(2) });
+      await expect(answers[1]).resolves.toEqual(details(2));
     });
   });
 });

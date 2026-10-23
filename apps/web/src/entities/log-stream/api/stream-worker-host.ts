@@ -13,14 +13,27 @@ import {
   type StreamSocketHandlers,
 } from '@/shared/api';
 
+import { formatPayload } from '../lib/format-payload';
 import type {
   FromWorkerMessage,
+  LogEventDetails,
   MessageEndpoint,
   ToWorkerMessage,
   WorkerConfigureMessage,
   WorkerGetEventMessage,
   WorkerStartMessage,
 } from './worker-protocol';
+
+/**
+ * The details of the event at `position`, or `undefined` once it is evicted. `eventAt` builds one
+ * object per request; the details view asks for one event at a time.
+ */
+function eventDetails(store: EventStore, position: number): LogEventDetails | undefined {
+  const event = store.eventAt(position);
+  if (event === undefined) return undefined;
+  const { payload, ...fields } = event;
+  return { event: fields, payload: payload === undefined ? undefined : formatPayload(payload) };
+}
 
 /** `stream-error` code when a `configure` arrives while the session has no open connection. */
 export const NOT_CONNECTED_ERROR_CODE = 'not-connected';
@@ -158,8 +171,7 @@ export function createStreamWorkerHost(
   function getEvent({ session: target, requestId, position }: WorkerGetEventMessage): void {
     // The main thread settled the requests of an older session when it started this one.
     if (target !== session) return;
-    // `eventAt` builds one object per request (the details view asks for one event at a time).
-    post({ type: 'event', session, requestId, event: store.eventAt(position) });
+    post({ type: 'event', session, requestId, details: eventDetails(store, position) });
   }
 
   port.onmessage = ({ data }) => {
