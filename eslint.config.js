@@ -283,7 +283,7 @@ export default defineConfig(
     },
   },
   {
-    files: ['apps/web/e2e/**/*.ts'],
+    files: ['apps/web/{e2e,perf}/**/*.ts'],
     extends: [playwright.configs['flat/recommended']],
   },
   prettier,
