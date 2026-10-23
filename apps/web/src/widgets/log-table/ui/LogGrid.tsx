@@ -48,6 +48,12 @@ export interface LogGridProps {
   readonly start: number;
   /** Position after the last row to show. */
   readonly end: number;
+  /**
+   * The stream view is paused: the caller holds `end` still, and the grid stops following (rows
+   * keyed by position, anchored while `start` grows) and hides "Jump to latest". When it turns
+   * false again the grid jumps to the newest row and follows.
+   */
+  readonly paused?: boolean;
 }
 
 /**
@@ -73,11 +79,11 @@ export interface LogGridProps {
  * rebuilds its measurements in O(count) whenever the count changes (11 ms per batch near 1M rows);
  * with a fixed count that happens once per buffer.
  */
-export function LogGrid({ buffer, start, end }: LogGridProps) {
+export function LogGrid({ buffer, start, end, paused = false }: LogGridProps) {
   const headingId = useId();
   const rowBaseId = useId();
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [following, setFollowing] = useState(true);
+  const [following, setFollowing] = useState(!paused);
   /** Position of the keyboard cursor; may fall out of `[start, end)` through eviction. */
   const [active, setActive] = useState<number | undefined>(undefined);
 
@@ -87,6 +93,13 @@ export function LogGrid({ buffer, start, end }: LogGridProps) {
     setShownBuffer(buffer);
     setFollowing(true);
     setActive(undefined);
+  }
+
+  // Pausing holds the rows in view where they are; resuming returns to the tail.
+  const [shownPaused, setShownPaused] = useState(paused);
+  if (paused !== shownPaused) {
+    setShownPaused(paused);
+    setFollowing(!paused);
   }
 
   /** The virtualizer's scroll listener, to report the grid's own writes without delay. */
@@ -353,10 +366,12 @@ export function LogGrid({ buffer, start, end }: LogGridProps) {
         </div>
         {count === 0 && (
           <p className="pointer-events-none absolute inset-x-0 top-14 text-center text-sm text-fg-muted">
-            Waiting for events…
+            {paused
+              ? 'Paused: no events to show. Resume to see the newest.'
+              : 'Waiting for events…'}
           </p>
         )}
-        {!following && (
+        {!following && !paused && (
           <Button
             variant="primary"
             size="sm"

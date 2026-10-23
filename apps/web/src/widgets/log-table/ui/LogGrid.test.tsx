@@ -424,4 +424,93 @@ describe('LogGrid', () => {
     expect(view.grid).not.toHaveAttribute('aria-activedescendant');
     expect(dataRows(view.grid).at(-1)).toHaveTextContent('event 40');
   });
+
+  describe('paused', () => {
+    /** Renders the grid like `LogTable`: while paused, `end` holds at `pausedEnd`. */
+    function renderPausable(buffer: EventStore) {
+      const props = (pausedEnd: number | undefined) => ({
+        buffer,
+        start: buffer.start,
+        end: pausedEnd === undefined ? buffer.end : Math.max(buffer.start, pausedEnd),
+        paused: pausedEnd !== undefined,
+      });
+      const view = render(<LogGrid {...props(undefined)} />);
+      return {
+        grid: screen.getByRole('grid', { name: 'Events' }),
+        /** A new snapshot: paused at `pausedEnd`, or following the stream without it. */
+        update: (pausedEnd?: number): void => {
+          view.rerender(<LogGrid {...props(pausedEnd)} />);
+        },
+      };
+    }
+
+    it('holds the rows in view while events arrive and old ones are evicted', () => {
+      const { buffer, append } = createBuffer(1000);
+      append(1000);
+      const { grid, update } = renderPausable(buffer);
+      update(1000);
+      const newest = within(grid).getByText('event 1000');
+
+      append(120);
+      update(1000);
+
+      expect(grid).toHaveAttribute('aria-rowcount', String(1000 - 120 + 1));
+      expect(dataRows(grid).at(-1)).toHaveTextContent('event 1000');
+      expect(within(grid).getByText('event 1000')).toBe(newest);
+      expect(grid.scrollTop).toBe(maxScrollTop(grid));
+      expect(screen.queryByRole('button', { name: 'Jump to latest' })).not.toBeInTheDocument();
+    });
+
+    it('keeps a position the user scrolled to while paused', () => {
+      const { buffer, append } = createBuffer(1000);
+      append(1000);
+      const { grid, update } = renderPausable(buffer);
+      update(1000);
+      scrollTo(grid, 500 * ROW_HEIGHT);
+
+      append(100);
+      update(1000);
+
+      expect(grid.scrollTop).toBe(400 * ROW_HEIGHT);
+      expect(dataRows(grid).some((row) => row.textContent.includes('event 501'))).toBe(true);
+    });
+
+    it('jumps to the newest row and follows again on resume', () => {
+      const { buffer, append } = createBuffer(1000);
+      append(500);
+      const { grid, update } = renderPausable(buffer);
+      update(500);
+      scrollTo(grid, 0);
+      append(200);
+      update(500);
+      expect(dataRows(grid)[0]).toHaveTextContent('event 1');
+
+      update();
+
+      expect(grid).toHaveAttribute('aria-rowcount', '701');
+      expect(dataRows(grid).at(-1)).toHaveTextContent('event 700');
+      expect(grid.scrollTop).toBe(maxScrollTop(grid));
+
+      append(30);
+      update();
+      expect(dataRows(grid).at(-1)).toHaveTextContent('event 730');
+      expect(grid.scrollTop).toBe(maxScrollTop(grid));
+    });
+
+    it('says why the paused view is empty once eviction passed the pause point', () => {
+      const { buffer, append } = createBuffer(1000);
+      append(1000);
+      const { grid, update } = renderPausable(buffer);
+      update(1000);
+
+      append(1200);
+      update(1000);
+
+      expect(grid).toHaveAttribute('aria-rowcount', '1');
+      expect(
+        screen.getByText('Paused: no events to show. Resume to see the newest.'),
+      ).toBeVisible();
+      expect(screen.queryByText('Waiting for events…')).not.toBeInTheDocument();
+    });
+  });
 });
