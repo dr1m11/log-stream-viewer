@@ -1,5 +1,5 @@
 import type { ColumnBatch, StreamCounters } from '@lsv/core';
-import type { ConfigMessage, ErrorMessage, HelloMessage } from '@lsv/protocol';
+import type { ConfigMessage, ErrorMessage, HelloMessage, LogEvent } from '@lsv/protocol';
 
 import type { StreamConfigureRequest, StreamRequest } from '@/shared/api';
 
@@ -10,7 +10,7 @@ import type { StreamConfigureRequest, StreamRequest } from '@/shared/api';
  *
  * Every message carries the `session` the main thread started: it increments the number on each
  * `start`, and drops whatever the worker still sends for an older session, so a restart never
- * mixes two streams. `get-event`/`event` (T8) join these unions later.
+ * mixes two streams.
  */
 
 /** Opens a stream: closes the current connection and starts a new session with a new buffer. */
@@ -39,8 +39,21 @@ export interface WorkerConfigureMessage extends StreamConfigureRequest {
   readonly session: number;
 }
 
+/**
+ * Asks for the full event at a buffer position, payload included (the details view). The worker
+ * answers with `event` echoing `requestId`; a request for an older session gets no answer.
+ */
+export interface WorkerGetEventMessage {
+  readonly type: 'get-event';
+  readonly session: number;
+  /** Numbers the request within the store; the answer carries it back. */
+  readonly requestId: number;
+  readonly position: number;
+}
+
 /** Main thread → worker. */
-export type ToWorkerMessage = WorkerStartMessage | WorkerStopMessage | WorkerConfigureMessage;
+export type ToWorkerMessage =
+  WorkerStartMessage | WorkerStopMessage | WorkerConfigureMessage | WorkerGetEventMessage;
 
 /** The server accepted the connection (its `hello`): the stream has started. */
 export interface WorkerHelloMessage extends Pick<HelloMessage, 'stream' | 'limits' | 'expiresAt'> {
@@ -97,6 +110,17 @@ export interface WorkerStreamErrorMessage extends Pick<ErrorMessage, 'code' | 'm
   readonly session: number;
 }
 
+/**
+ * The answer to `get-event`: the event from the worker's buffer with its payload (structured-
+ * cloned), or `undefined` once the position has been evicted.
+ */
+export interface WorkerEventMessage {
+  readonly type: 'event';
+  readonly session: number;
+  readonly requestId: number;
+  readonly event: LogEvent | undefined;
+}
+
 /** Worker → main thread. */
 export type FromWorkerMessage =
   | WorkerHelloMessage
@@ -104,7 +128,8 @@ export type FromWorkerMessage =
   | WorkerCountersMessage
   | WorkerClosedMessage
   | WorkerConfigMessage
-  | WorkerStreamErrorMessage;
+  | WorkerStreamErrorMessage
+  | WorkerEventMessage;
 
 /**
  * One end of a message channel, as the worker global scope, a `Worker` or a `MessagePort`

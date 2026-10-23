@@ -1,10 +1,14 @@
 import { type ColumnBatch, createEventStore, type StreamCounters } from '@lsv/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { FakeWorker, testBatch, testHello } from '@/shared/lib/testing';
+import { FakeWorker, testBatch, testHello, testLogEvent } from '@/shared/lib/testing';
 
 import type { FromWorkerMessage } from '../api/worker-protocol';
-import { createLogStreamStore, MAX_AUTO_RESTARTS } from './log-stream-store';
+import {
+  createLogStreamStore,
+  MAX_AUTO_RESTARTS,
+  MAX_PENDING_EVENT_REQUESTS,
+} from './log-stream-store';
 
 const ENDPOINT = 'ws://localhost:8787/ws';
 
@@ -669,6 +673,122 @@ describe('createLogStreamStore', () => {
       store.pause();
 
       expect(store.getSnapshot()).toMatchObject({ paused: { start: 0, end: 0 }, end: 0 });
+    });
+  });
+
+  describe('getEvent', () => {
+    /** A connected store whose replica holds the events `seq` 1–`count` at positions 0–`count - 1`. */
+    function withRows(count: number, capacity = 10_000) {
+      const context = setup(capacity);
+      context.hello();
+      context.send({
+        type: 'batch',
+        session: 1,
+        columns: createSource(capacity)(seqs(1, count)),
+        counters: counters(),
+      });
+      return context;
+    }
+
+    /** The `get-event` messages posted to the current worker. */
+    function requests(worker: FakeWorker) {
+      return worker
+        .messages()
+        .filter(
+          (message) =>
+            typeof message === 'object' &&
+            message !== null &&
+            'type' in message &&
+            message.type === 'get-event',
+        );
+    }
+
+    it("asks the worker for the event at a position and resolves with the worker's answer", async () => {
+      const { store, worker, send } = withRows(5);
+      const event = testLogEvent(3, { payload: { orderId: 'o-1' }, traceId: 't-3' });
+
+      const answer = store.getEvent(2);
+      expect(requests(worker())).toEqual([
+        { type: 'get-event', session: 1, requestId: 1, position: 2 },
+      ]);
+      send({ type: 'event', session: 1, requestId: 1, event });
+
+      await expect(answer).resolves.toEqual(event);
+    });
+
+    it('matches answers to requests by request id', async () => {
+      const { store, send } = withRows(5);
+      const first = store.getEvent(0);
+      const second = store.getEvent(1);
+
+      send({ type: 'event', session: 1, requestId: 2, event: testLogEvent(2) });
+      send({ type: 'event', session: 1, requestId: 1, event: testLogEvent(1) });
+
+      await expect(first).resolves.toEqual(testLogEvent(1));
+      await expect(second).resolves.toEqual(testLogEvent(2));
+    });
+
+    it('resolves undefined when the worker has evicted the position', async () => {
+      const { store, send } = withRows(5);
+
+      const answer = store.getEvent(0);
+      send({ type: 'event', session: 1, requestId: 1, event: undefined });
+
+      await expect(answer).resolves.toBeUndefined();
+    });
+
+    it('resolves undefined without asking when the replica no longer holds the position', async () => {
+      const { store, worker } = withRows(1200, 1000);
+
+      await expect(store.getEvent(100)).resolves.toBeUndefined();
+      await expect(store.getEvent(5000)).resolves.toBeUndefined();
+      expect(requests(worker())).toEqual([]);
+    });
+
+    it('settles the requests of a session that is over with undefined and drops their answers', async () => {
+      const { store, send, hello } = withRows(5);
+      const answer = store.getEvent(1);
+
+      store.start();
+      await expect(answer).resolves.toBeUndefined();
+
+      // A late answer for session 1 neither resolves anything nor changes the snapshot.
+      hello(2);
+      nextFrame();
+      const snapshot = store.getSnapshot();
+      send({ type: 'event', session: 1, requestId: 1, event: testLogEvent(2) });
+      nextFrame();
+      expect(store.getSnapshot()).toBe(snapshot);
+    });
+
+    it('settles pending requests on stop() and answers undefined while stopped', async () => {
+      const { store } = withRows(5);
+      const answer = store.getEvent(1);
+
+      store.stop();
+
+      await expect(answer).resolves.toBeUndefined();
+      await expect(store.getEvent(1)).resolves.toBeUndefined();
+    });
+
+    it('settles pending requests when the worker fails', async () => {
+      const { store, worker } = withRows(5);
+      const answer = store.getEvent(1);
+
+      worker().fail('Script error');
+
+      await expect(answer).resolves.toBeUndefined();
+    });
+
+    it(`keeps at most ${String(MAX_PENDING_EVENT_REQUESTS)} requests waiting, settling the oldest`, async () => {
+      const { store, send } = withRows(100);
+      const answers = Array.from({ length: MAX_PENDING_EVENT_REQUESTS + 1 }, (_, index) =>
+        store.getEvent(index),
+      );
+
+      await expect(answers[0]).resolves.toBeUndefined();
+      send({ type: 'event', session: 1, requestId: 2, event: testLogEvent(2) });
+      await expect(answers[1]).resolves.toEqual(testLogEvent(2));
     });
   });
 });

@@ -82,4 +82,24 @@ describe('the stream pipeline (store, worker host and socket)', () => {
     store.stop();
     expect(socket.closedWith?.code).toBe(1000);
   });
+  it('fetches the full event with its payload from the worker for the details view', async () => {
+    const store = createLogStreamStore({
+      endpoint: 'ws://localhost:8787/ws',
+      request: {},
+      capacity: 1000,
+      spawnWorker: inProcessWorker,
+    });
+    store.start();
+    const socket = FakeWebSocket.latest();
+    socket.open();
+    socket.receive(helloFrame);
+    const withPayload = testLogEvent(2, { payload: { userId: 'u-9', cacheHit: false } });
+    socket.receive(JSON.stringify({ ...testBatch([]), events: [testLogEvent(1), withPayload] }));
+
+    // The replica does not keep the payload; the worker's buffer does.
+    expect(store.getSnapshot().buffer.eventAt(1)).toEqual(testLogEvent(2));
+    await expect(store.getEvent(1)).resolves.toEqual(withPayload);
+
+    store.stop();
+  });
 });

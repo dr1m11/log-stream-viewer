@@ -351,6 +351,52 @@ describe('createStreamWorkerHost', () => {
     expect(port.posted).toHaveLength(posted);
   });
 
+  it('answers get-event with the full event at the position, payload included', () => {
+    const { port, start } = setup();
+    const socket = start(2);
+    connect(socket);
+    const withPayload = testLogEvent(2, {
+      traceId: 'trace-2',
+      payload: { orderId: 'o-17', items: [{ sku: 'a', qty: 2 }] },
+    });
+    socket.receive(JSON.stringify({ ...testBatch([]), events: [testLogEvent(1), withPayload] }));
+
+    port.receive({ type: 'get-event', session: 2, requestId: 7, position: 1 });
+    port.receive({ type: 'get-event', session: 2, requestId: 8, position: 0 });
+
+    expect(port.messages().slice(-2)).toEqual([
+      { type: 'event', session: 2, requestId: 7, event: withPayload },
+      { type: 'event', session: 2, requestId: 8, event: testLogEvent(1) },
+    ]);
+  });
+
+  it('answers get-event with undefined once the position has been evicted', () => {
+    const { port, start } = setup();
+    const socket = start(1, 1000);
+    connect(socket);
+    socket.receive(frame(seqs(1, 1200)));
+
+    port.receive({ type: 'get-event', session: 1, requestId: 1, position: 199 });
+    port.receive({ type: 'get-event', session: 1, requestId: 2, position: 200 });
+
+    expect(port.messages().slice(-2)).toEqual([
+      { type: 'event', session: 1, requestId: 1, event: undefined },
+      { type: 'event', session: 1, requestId: 2, event: testLogEvent(201) },
+    ]);
+  });
+
+  it('ignores a get-event for an older session', () => {
+    const { port, start } = setup();
+    const socket = start(3);
+    connect(socket);
+    socket.receive(frame([1, 2, 3]));
+    const posted = port.posted.length;
+
+    port.receive({ type: 'get-event', session: 2, requestId: 1, position: 0 });
+
+    expect(port.posted).toHaveLength(posted);
+  });
+
   it('closes the connection and stops listening when disposed', () => {
     const { port, host, start } = setup();
     const socket = start();
