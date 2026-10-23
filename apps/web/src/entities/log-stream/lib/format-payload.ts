@@ -17,12 +17,18 @@ export interface PayloadText {
   readonly length: number;
 }
 
-/** Pretty-prints a payload (in the worker, off the main thread) and cuts it at `maxLength`. */
+/**
+ * Pretty-prints a payload (in the worker, off the main thread) and cuts it at `maxLength`. The cut
+ * never splits a surrogate pair (an emoji, say): it then falls one character earlier, so the text
+ * never ends in a lone high surrogate.
+ */
 export function formatPayload(
   payload: JsonValue,
   maxLength: number = MAX_PAYLOAD_TEXT_LENGTH,
 ): PayloadText {
   const full = JSON.stringify(payload, null, 2);
   if (full.length <= maxLength) return { text: full, truncated: false, length: full.length };
-  return { text: full.slice(0, maxLength), truncated: true, length: full.length };
+  const last = full.charCodeAt(maxLength - 1);
+  const cut = last >= 0xd800 && last <= 0xdbff ? maxLength - 1 : maxLength;
+  return { text: full.slice(0, cut), truncated: true, length: full.length };
 }

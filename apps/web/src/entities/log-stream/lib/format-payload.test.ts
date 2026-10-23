@@ -23,6 +23,12 @@ describe('formatPayload', () => {
     expect(result.length).toBe(full.length);
   });
 
+  it('does not split an emoji at the cut', () => {
+    // '"a😀b"': the emoji is the surrogate pair at indexes 2 and 3.
+    expect(formatPayload('a😀b', 3)).toEqual({ text: '"a', truncated: true, length: 6 });
+    expect(formatPayload('a😀b', 4)).toEqual({ text: '"a😀', truncated: true, length: 6 });
+  });
+
   it('keeps a payload exactly at the limit whole', () => {
     expect(formatPayload('abc', 5)).toEqual({ text: '"abc"', truncated: false, length: 5 });
     expect(formatPayload('abcd', 5)).toEqual({ text: '"abcd', truncated: true, length: 6 });

@@ -2,7 +2,11 @@ import type { Locator } from '@playwright/test';
 
 import { expect, test } from './fixtures';
 
-/** Data rows in the table (its `aria-rowcount` less the header row). */
+/**
+ * Rows in the table below the header: its `aria-rowcount` less the header row, so the event rows
+ * plus the details row while one is open. The test compares counts taken while the same row is
+ * open, so the details row cancels out.
+ */
 async function rowCount(grid: Locator): Promise<number> {
   return Number(await grid.getAttribute('aria-rowcount')) - 1;
 }

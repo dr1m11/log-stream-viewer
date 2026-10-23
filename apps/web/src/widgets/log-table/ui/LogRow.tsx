@@ -187,9 +187,10 @@ export interface DetailsRowProps {
 
 /**
  * The open row's details: a level-2 row of the treegrid right after it (the child that its
- * `aria-expanded` discloses), with one cell across every column.
+ * `aria-expanded` discloses), with one cell across every column. Memoized: its props do not
+ * change while rows arrive, so the grid's commits per frame skip it.
  */
-export function DetailsRow({
+export const DetailsRow = memo(function DetailsRow({
   buffer,
   position,
   rowIndex,
@@ -209,4 +210,4 @@ export function DetailsRow({
       </div>
     </div>
   );
-}
+});
