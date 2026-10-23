@@ -68,8 +68,33 @@ describe('anchorScrollTop', () => {
   it('leaves the offset alone for open details in or below the view', () => {
     // The view starts on row 40's own line: its details are in view.
     expect(anchorScrollTop(40 * 28, 0, 28, undefined, OPEN)).toBe(40 * 28);
-    expect(anchorScrollTop(40 * 28 + 100, 0, 28, OPEN, undefined)).toBe(40 * 28 + 100);
+    expect(anchorScrollTop(40 * 28 + 10, 0, 28, OPEN, OPEN)).toBe(40 * 28 + 10);
     expect(anchorScrollTop(280, 5, 28, OPEN, { index: 35, extra: 200 })).toBe(280 - 5 * 28);
+  });
+
+  describe('with the top of the view inside the open details', () => {
+    // Row 10's line ends at 308; its details span 308..508; the view starts 92 px into them.
+    const ROW_10: ExpandedRow = { index: 10, extra: 200 };
+
+    it('keeps the offset while nothing changes, also from exactly where the details start', () => {
+      expect(anchorScrollTop(400, 0, 28, ROW_10, ROW_10)).toBe(400);
+      expect(anchorScrollTop(308, 0, 28, ROW_10, ROW_10)).toBe(308);
+    });
+
+    it('keeps the distance into the details when they grow, and stops at their end when they shrink', () => {
+      expect(anchorScrollTop(400, 0, 28, ROW_10, { index: 10, extra: 320 })).toBe(400);
+      expect(anchorScrollTop(400, 0, 28, ROW_10, { index: 10, extra: 50 })).toBe(308 + 50);
+    });
+
+    it('moves with rows evicted above the open row', () => {
+      expect(anchorScrollTop(400, 3, 28, ROW_10, { index: 7, extra: 200 })).toBe(400 - 3 * 28);
+    });
+
+    it('lands just below the row line when the details close or their row is evicted', () => {
+      expect(anchorScrollTop(400, 0, 28, ROW_10, undefined)).toBe(308);
+      expect(anchorScrollTop(400, 4, 28, { index: 10, extra: 200 }, undefined)).toBe(308 - 4 * 28);
+      expect(anchorScrollTop(400, 11, 28, ROW_10, undefined)).toBe(0);
+    });
   });
 });
 

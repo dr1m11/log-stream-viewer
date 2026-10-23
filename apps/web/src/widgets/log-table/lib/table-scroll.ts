@@ -53,9 +53,12 @@ export function rowsHeight(count: number, rowHeight: number, expanded?: Expanded
  *   the offset shrinks by as many row heights;
  * - the open details changed: `before` is the expanded row of the previous layout (in its indexes)
  *   and `after` the one of the new layout (`undefined` once collapsed or evicted with its row).
- *   Details that end above the viewport (`scrollTop`) count fully, details in or below the view do
- *   not move the rows on screen. So details that were evicted, collapsed or resized above the view
- *   take their height out of (or into) the offset, and details opened above the view add theirs.
+ *   Details that end above the viewport (`scrollTop`) count fully, details below the row line in
+ *   view do not move the rows on screen. So details that were evicted, collapsed or resized above
+ *   the view take their height out of (or into) the offset, and details opened above the view add
+ *   theirs. When the view's top edge is inside the details (their row's line scrolled under the
+ *   header), the offset keeps the same distance into them — as far as they still reach, if they
+ *   shrank — and lands just below the row's line once they are gone.
  *
  * If the rows on screen were evicted themselves, the table stops at the top, at the oldest row
  * still retained.
@@ -67,14 +70,28 @@ export function anchorScrollTop(
   before?: ExpandedRow,
   after?: ExpandedRow,
 ): number {
+  // The offset in the previous layout without its details, and how far into them the view starts.
   let top = scrollTop;
-  // The offset in the previous layout without its details, if they were above the view.
-  if (before !== undefined && (before.index + 1) * rowHeight + before.extra <= scrollTop) {
-    top -= before.extra;
+  let inside: number | undefined;
+  if (before !== undefined) {
+    const lineBottom = (before.index + 1) * rowHeight;
+    if (scrollTop >= lineBottom + before.extra) {
+      top -= before.extra;
+    } else if (scrollTop >= lineBottom) {
+      inside = scrollTop - lineBottom;
+      top = lineBottom;
+    }
   }
   top -= evictedRows * rowHeight;
-  // `top` is now in the new indexes without any details: add the new ones if they are above it.
-  if (after !== undefined && (after.index + 1) * rowHeight <= top) top += after.extra;
+  // `top` is now in the new indexes without any details: add back what of the new ones is above it.
+  if (after !== undefined) {
+    const sameRow = before !== undefined && after.index === before.index - evictedRows;
+    if (sameRow && inside !== undefined) {
+      top += Math.min(inside, after.extra);
+    } else if ((after.index + 1) * rowHeight <= top) {
+      top += after.extra;
+    }
+  }
   return Math.max(0, top);
 }
 
